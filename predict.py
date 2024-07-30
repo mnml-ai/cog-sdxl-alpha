@@ -84,6 +84,14 @@ class Predictor(BasePredictor):
     def setup(self, weights: Optional[Path] = None):
         """Load the model into memory to make running multiple predictions efficient"""
 
+        IPADAPTER_URL = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl.bin"
+        IPADAPTER_PLUS_URL = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin"
+        IPADAPTER_PLUS_FACE_URL = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus-face_sdxl_vit-h.bin"
+
+        WeightsDownloader.download_if_not_exists(IPADAPTER_URL, "./ip-adapter")
+        WeightsDownloader.download_if_not_exists(IPADAPTER_PLUS_URL, "./ip-adapter-plus")
+        WeightsDownloader.download_if_not_exists(IPADAPTER_PLUS_FACE_URL, "./ip-adapter-plus-face")
+
         start = time.time()
         self.sizing_strategy = SizingStrategy()
         self.weights_manager = WeightsManager(self)
@@ -160,6 +168,8 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
+        self.ip_adapter_handler = IPAdapterHandler(self.txt2img_pipe)
+
         print("setup took: ", time.time() - start)
 
     def run_safety_checker(self, image):
@@ -176,6 +186,21 @@ class Predictor(BasePredictor):
     @torch.inference_mode()
     def predict(
         self,
+        use_ip_adapter: str = Input(
+            description="Which IP-Adapter model to use",
+            choices=["none", "ip-adapter", "ip-adapter-plus", "ip-adapter-plus-face"],
+            default="none",
+            ),
+        ip_adapter_image: Path = Input(
+            description="Input image for IP-Adapter",
+            default=None,
+        ),
+        ip_adapter_scale: float = Input(
+            description="Scale for IP-Adapter conditioning",
+            ge=0.0,
+            le=1.0,
+            default=0.5,
+        ),
         prompt: str = Input(
             description="Input prompt",
             default="An astronaut riding a rainbow unicorn",
@@ -553,6 +578,19 @@ class Predictor(BasePredictor):
                 output_path = f"/tmp/control-{i}.png"
                 image.save(output_path)
                 output_paths.append(Path(output_path))
+
+        if use_ip_adapter != "none":
+            if ip_adapter_image is None:
+                raise ValueError("IP-Adapter image is required when using IP-Adapter")
+            
+            face = use_ip_adapter == "ip-adapter-plus-face"
+            images = self.ip_adapter_handler.generate_with_ip_adapter(
+                prompt,
+                ip_adapter_image,
+                num_samples=num_outputs,
+                scale=ip_adapter_scale,
+                face=face
+            )
 
         for i, image in enumerate(output.images):
             if not disable_safety_checker:
