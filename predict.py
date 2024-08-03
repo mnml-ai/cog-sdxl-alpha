@@ -561,7 +561,7 @@ class Predictor(BasePredictor):
             pipe.watermark = None
             self.refiner.watermark = None
 
-        if ip_adapter_image:
+        if ip_adapter_image is not None:
             try:
                 print("Using IP-Adapter pipeline")
                 ip_image = load_image(ip_adapter_image)
@@ -633,9 +633,9 @@ class Predictor(BasePredictor):
                 "NSFW content detected. Try running it again, or try a different prompt."
             )
 
-        if ip_adapter_image:
-            # Unload IP Adapter after inference
-            self.ip_adapter.unpatch_pipe(pipe)
+        if ip_adapter_image is not None:
+            # Reset the pipeline to its original state
+            pipe = self.txt2img_pipe  # or whichever pipeline you started with
 
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
