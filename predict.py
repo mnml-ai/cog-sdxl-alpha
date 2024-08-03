@@ -422,22 +422,8 @@ class Predictor(BasePredictor):
             controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
         )
 
-        if ip_adapter_image:
-            ip_image = Image.open(ip_adapter_image).convert("RGB")
-            ip_image = ip_image.resize((224, 224))
-            images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
-                scale=ip_adapter_scale,
-            )
-            output = type('obj', (object,), {'images': images})
-        else:
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+        # Initialize pipe with a default value
+        pipe = self.txt2img_pipe
 
         controlnet_args = {}
         control_images = []
@@ -495,32 +481,29 @@ class Predictor(BasePredictor):
                 controlnet_args["control_image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetInpaintPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
             elif img2img:
                 print("Using img2img + controlnet pipeline")
                 controlnet_args["control_image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetImg2ImgPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
             else:
                 print("Using txt2img + controlnet pipeline")
                 controlnet_args["image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
-
         elif inpainting:
             print("Using inpaint pipeline")
             pipe = self.inpaint_pipe
         elif img2img:
             print("Using img2img pipeline")
             pipe = self.img2img_pipe
-        else:
-            print("Using txt2img pipeline")
-            pipe = self.txt2img_pipe
+        # No need for an else case as pipe is already initialized to txt2img_pipe
 
         if inpainting:
             sdxl_kwargs["image"] = image
@@ -550,7 +533,7 @@ class Predictor(BasePredictor):
             "num_inference_steps": num_inference_steps,
         }
 
-        # img2img pipeline doesn’t accept width/height
+        # img2img pipeline doesn't accept width/height
         # (img2img with controlnet does)
         if controlnet or not img2img:
             common_args["width"] = width
@@ -562,13 +545,22 @@ class Predictor(BasePredictor):
         inference_start = time.time()
 
         if ip_adapter_image:
-            output = self.ip_adapter.generate(
-                **common_args,
-                **sdxl_kwargs,
-                **controlnet_args
+            ip_image = Image.open(ip_adapter_image).convert("RGB")
+            ip_image = ip_image.resize((224, 224))
+            images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                scale=ip_adapter_scale,
             )
+            output = type('obj', (object,), {'images': images})
         else:
             output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+        
         print(f"inference took: {time.time() - inference_start:.2f}s")
 
         if refine == "base_image_refiner":
