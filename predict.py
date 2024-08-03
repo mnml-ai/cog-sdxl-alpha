@@ -34,7 +34,7 @@ sys.path.extend(['/IP-Adapter'])
 from ip_adapter import IPAdapterPlusXL
 
 IP_ADAPTER_IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder"
-IP_ADAPTER_SDXL_PATH = "/IP-Adapter/sdxl_models/ip-adapter_sdxl_vit-h.bin"
+IP_ADAPTER_SDXL_PATH = "/IP-Adapter/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin"
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -167,13 +167,9 @@ class Predictor(BasePredictor):
         self.controlnet = ControlNet(self)
 
         print("Loading IP-Adapter...")
-        self.ip_adapter = IPAdapterPlusXL(
-            self.txt2img_pipe,
-            IP_ADAPTER_IMAGE_ENCODER_PATH,
-            IP_ADAPTER_SDXL_PATH,
-            "cuda",
-            num_tokens=16
-        )
+        self.ip_adapter = IPAdapterPlusXL(self.txt2img_pipe, IP_ADAPTER_IMAGE_ENCODER_PATH, IP_ADAPTER_SDXL_PATH, device="cuda", num_tokens=16)
+
+
 
         print("setup took: ", time.time() - start)
 
@@ -429,8 +425,19 @@ class Predictor(BasePredictor):
         if ip_adapter_image:
             ip_image = Image.open(ip_adapter_image).convert("RGB")
             ip_image = ip_image.resize((224, 224))
-            sdxl_kwargs["ip_adapter_image"] = ip_image
-            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
+            images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                scale=ip_adapter_scale,
+            )
+            output = type('obj', (object,), {'images': images})
+        else:
+            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
 
         controlnet_args = {}
         control_images = []
@@ -553,7 +560,7 @@ class Predictor(BasePredictor):
             sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
 
         inference_start = time.time()
-        
+
         if ip_adapter_image:
             output = self.ip_adapter.generate(
                 **common_args,
