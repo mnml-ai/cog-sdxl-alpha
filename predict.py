@@ -66,9 +66,6 @@ SCHEDULERS = {
 
 
 class Predictor(BasePredictor):
-
- 
-
     def load_ip_adapter(self):
         ip_adapter_path = "ip-adapter_sdxl_vit-h.bin"
         if not os.path.exists(ip_adapter_path):
@@ -141,7 +138,6 @@ class Predictor(BasePredictor):
             self.load_trained_weights(weights, self.txt2img_pipe)
 
         self.txt2img_pipe.to("cuda")
-
         self.load_ip_adapter()
 
         print("Loading SDXL img2img pipeline...")
@@ -169,11 +165,6 @@ class Predictor(BasePredictor):
         self.inpaint_pipe.to("cuda")
 
         print("Loading SDXL refiner pipeline...")
-        # FIXME(ja): should the vae/text_encoder_2 be loaded from SDXL always?
-        #            - in the case of fine-tuned SDXL should we still?
-        # FIXME(ja): if the answer to above is use VAE/Text_Encoder_2 from fine-tune
-        #            what does this imply about lora + refiner? does the refiner need to know about
-
         WeightsDownloader.download_if_not_exists(REFINER_URL, REFINER_MODEL_CACHE)
 
         print("Loading refiner pipeline...")
@@ -385,7 +376,7 @@ class Predictor(BasePredictor):
             le=1.0,
             default=1.0,
         ),
-        ) -> List[Path]:
+    ) -> List[Path]:
         """Run a single prediction on the model."""
         predict_start = time.time()
 
@@ -639,3 +630,4 @@ class Predictor(BasePredictor):
 
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
+            
