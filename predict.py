@@ -29,6 +29,7 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
+from PIL import Image
 import sys
 sys.path.extend(['/IP-Adapter'])
 from ip_adapter import IPAdapterPlusXL
