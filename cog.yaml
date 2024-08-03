@@ -25,6 +25,7 @@ build:
     - "git+https://github.com/tencent-ailab/IP-Adapter.git"
 
   run:
+    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.5.6/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
     - git clone https://github.com/tencent-ailab/IP-Adapter.git /IP-Adapter
     - cd /IP-Adapter && mkdir sdxl_models && cd sdxl_models && wget https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin
     - cd /IP-Adapter && mkdir models && cd models && mkdir image_encoder && cd image_encoder && wget https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/config.json
