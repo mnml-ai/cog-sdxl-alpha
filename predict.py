@@ -31,7 +31,7 @@ from sizing_strategy import SizingStrategy
 
 from diffusers.utils import load_image
 import requests
-
+from PIL import Image
 import sys
 sys.path.extend(['/IP-Adapter'])
 from ip_adapter.ip_adapter import IPAdapterXL
@@ -561,10 +561,10 @@ class Predictor(BasePredictor):
             pipe.watermark = None
             self.refiner.watermark = None
 
-        if ip_adapter_image is not None:
+        if ip_adapter_image is not None and os.path.isfile(ip_adapter_image):
             try:
                 print("Using IP-Adapter pipeline")
-                ip_image = load_image(ip_adapter_image)
+                ip_image = Image.open(ip_adapter_image).convert('RGB')
                 ip_image = ip_image.resize((512, 512))
                 
                 # Patch the pipeline with IP Adapter
