@@ -31,6 +31,7 @@ from sizing_strategy import SizingStrategy
 
 from PIL import Image
 from diffusers.utils import load_image
+from ip_adapter_downloader import download_ip_adapter
 from ip_adapter import IPAdapterPlus
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
@@ -83,11 +84,15 @@ class Predictor(BasePredictor):
 
     def load_ip_adapter(self):
         print("Loading IP-Adapter...")
-        ip_adapter_path = "./ip-adapter/ip-adapter_sdxl_vit-h.bin"
-        WeightsDownloader.download_if_not_exists(IP_ADAPTER_URL, ip_adapter_path)
+        ip_adapter_path = "./ip-adapter"
+        download_ip_adapter(ip_adapter_path)
+        
+        # Assuming we're using the 'ip-adapter_sdxl_vit-h' model
+        ip_adapter_file = os.path.join(ip_adapter_path, "ip-adapter_sdxl_vit-h.bin")
+        
         self.ip_adapter = IPAdapterPlus(
             self.txt2img_pipe,
-            ip_adapter_path,
+            ip_adapter_file,
             clip_vision_model="h94/IP-Adapter",
             subfolder="sdxl_models",
             dtype=torch.float16
@@ -386,7 +391,10 @@ class Predictor(BasePredictor):
         
         if ip_adapter_image:
             self.ip_adapter.set_scale(ip_adapter_scale)
+            ip_image = load_image(ip_adapter_image)
+            ip_image = ip_image.resize((224, 224))
             output = self.ip_adapter.generate(
+                ip_adapter_image=ip_image,
                 **common_args,
                 **sdxl_kwargs,
                 **controlnet_args,
