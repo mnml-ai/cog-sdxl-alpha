@@ -385,13 +385,23 @@ class Predictor(BasePredictor):
             le=1.0,
             default=1.0,
         ),
-    ) -> List[Path]:
+        ) -> List[Path]:
         """Run a single prediction on the model."""
         predict_start = time.time()
 
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
+
+        generator = torch.Generator("cuda").manual_seed(seed)
+
+        common_args = {
+            "prompt": [prompt] * num_outputs,
+            "negative_prompt": [negative_prompt] * num_outputs,
+            "guidance_scale": guidance_scale,
+            "generator": generator,
+            "num_inference_steps": num_inference_steps,
+        }
 
         resize_start = time.time()
         (
@@ -439,8 +449,6 @@ class Predictor(BasePredictor):
         controlnet = (
             controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
         )
-
-        
 
         controlnet_args = {}
         control_images = []
@@ -536,6 +544,23 @@ class Predictor(BasePredictor):
         if refine == "base_image_refiner":
             sdxl_kwargs["output_type"] = "latent"
 
+        # img2img pipeline doesn't accept width/height
+        # (img2img with controlnet does)
+        if controlnet or not img2img:
+            common_args["width"] = width
+            common_args["height"] = height
+
+        if self.is_lora:
+            sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
+
+        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
+
+        if not apply_watermark:
+            # toggles watermark for this prediction
+            watermark_cache = pipe.watermark
+            pipe.watermark = None
+            self.refiner.watermark = None
+
         if ip_adapter_image:
             ip_image = load_image(ip_adapter_image)
             ip_image = ip_image.resize((512, 512))
@@ -545,11 +570,8 @@ class Predictor(BasePredictor):
             images = self.ip_adapter.generate(
                 pil_image=ip_image,
                 num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
                 seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
+                **common_args,
                 **sdxl_kwargs,
                 **controlnet_args
             )
@@ -559,36 +581,10 @@ class Predictor(BasePredictor):
             inference_start = time.time()
             output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
             print(f"inference took: {time.time() - inference_start:.2f}s")
-            
+
         if not apply_watermark:
-            # toggles watermark for this prediction
-            watermark_cache = pipe.watermark
-            pipe.watermark = None
-            self.refiner.watermark = None
-
-        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-        generator = torch.Generator("cuda").manual_seed(seed)
-
-        common_args = {
-            "prompt": [prompt] * num_outputs,
-            "negative_prompt": [negative_prompt] * num_outputs,
-            "guidance_scale": guidance_scale,
-            "generator": generator,
-            "num_inference_steps": num_inference_steps,
-        }
-
-        # img2img pipeline doesn’t accept width/height
-        # (img2img with controlnet does)
-        if controlnet or not img2img:
-            common_args["width"] = width
-            common_args["height"] = height
-
-        if self.is_lora:
-            sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
-
-        inference_start = time.time()
-        output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-        print(f"inference took: {time.time() - inference_start:.2f}s")
+            pipe.watermark = watermark_cache
+            self.refiner.watermark = watermark_cache
 
         if refine == "base_image_refiner":
             refiner_kwargs = {
@@ -599,14 +595,10 @@ class Predictor(BasePredictor):
                 k: v for k, v in common_args.items() if k not in ["width", "height"]
             }
 
-            if refine == "base_image_refiner" and refine_steps:
+            if refine_steps:
                 common_args_without_dimensions["num_inference_steps"] = refine_steps
 
             output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
-
-        if not apply_watermark:
-            pipe.watermark = watermark_cache
-            self.refiner.watermark = watermark_cache
 
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
