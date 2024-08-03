@@ -456,13 +456,13 @@ class Predictor(BasePredictor):
                 guidance_scale=guidance_scale,
                 **sdxl_kwargs,
                 **controlnet_args
-    )
-    output = type('obj', (object,), {'images': images})()
-else:
-    # Your existing logic for non-IP-Adapter cases
-    inference_start = time.time()
-    output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-    print(f"inference took: {time.time() - inference_start:.2f}s")
+            )
+            output = type('obj', (object,), {'images': images})()
+        else:
+            # Your existing logic for non-IP-Adapter cases
+            inference_start = time.time()
+            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+            print(f"inference took: {time.time() - inference_start:.2f}s")
 
         controlnet_args = {}
         control_images = []
