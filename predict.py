@@ -31,7 +31,7 @@ from sizing_strategy import SizingStrategy
 
 from PIL import Image
 from diffusers.utils import load_image
-from ip_adapter import IPAdapterPlus
+from .ip_adapter import IPAdapterPlus
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
