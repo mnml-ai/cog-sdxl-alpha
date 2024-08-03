@@ -11,21 +11,21 @@ build:
     - "libxext6"
     - "curl"
   python_packages:
-    - "diffusers==0.21.4"
-    - "torch==2.0.1"
-    - "transformers==4.31.0"
+    - "diffusers==0.24.0"
+    - "torch==2.1.1"
+    - "transformers==4.36.2"
     - "invisible-watermark==0.2.0"
-    - "accelerate==0.21.0"
-    - "torchvision==0.15.2"
-    - "numpy==1.25.1"
+    - "accelerate==0.25.0"
+    - "torchvision==0.16.1"
+    - "numpy==1.26.2"
     - "fire==0.5.0"
-    - "opencv-python-headless>=4.1.0.25"
+    - "opencv-python-headless>=4.8.1.78"
     - "controlnet-aux==0.0.7"
     - "mediapipe==0.10.8"
-    - "timm==0.6.12"  # Add this line
-    - "requests"
-    - "omegaconf"
-    - "tqdm"
+    - "timm==0.9.12"
+    - "requests==2.31.0"
+    - "omegaconf==2.3.0"
+    - "tqdm==4.66.1"
 
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.5.6/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
