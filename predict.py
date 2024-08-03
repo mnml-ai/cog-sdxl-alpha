@@ -562,20 +562,28 @@ class Predictor(BasePredictor):
             self.refiner.watermark = None
 
         if ip_adapter_image:
-            ip_image = load_image(ip_adapter_image)
-            ip_image = ip_image.resize((512, 512))
-            
-            # Patch the pipeline with IP Adapter
-            self.ip_adapter.set_scale(ip_adapter_scale)
-            images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                seed=seed,
-                **common_args,
-                **sdxl_kwargs,
-                **controlnet_args
-            )
-            output = type('obj', (object,), {'images': images})()
+            try:
+                print("Using IP-Adapter pipeline")
+                ip_image = load_image(ip_adapter_image)
+                ip_image = ip_image.resize((512, 512))
+                
+                # Patch the pipeline with IP Adapter
+                self.ip_adapter.set_scale(ip_adapter_scale)
+                images = self.ip_adapter.generate(
+                    pil_image=ip_image,
+                    num_samples=num_outputs,
+                    seed=seed,
+                    **common_args,
+                    **sdxl_kwargs,
+                    **controlnet_args
+                )
+                output = type('obj', (object,), {'images': images})()
+            except Exception as e:
+                print(f"Error processing IP-Adapter image: {str(e)}")
+                # Fallback to normal pipeline if IP-Adapter fails
+                inference_start = time.time()
+                output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+                print(f"inference took: {time.time() - inference_start:.2f}s")
         else:
             # Your existing logic for non-IP-Adapter cases
             inference_start = time.time()
