@@ -84,7 +84,13 @@ class Predictor(BasePredictor):
     def load_ip_adapter(self):
         print("Loading IP-Adapter...")
         WeightsDownloader.download_if_not_exists(IP_ADAPTER_URL, "./ip-adapter")
-        self.ip_adapter = IPAdapterPlus(self.txt2img_pipe, "./ip-adapter/ip-adapter_sdxl_vit-h.safetensors", "h94/IP-Adapter", subfolder="sdxl_models", dtype=torch.float16)
+        self.ip_adapter = IPAdapterPlus(
+            self.txt2img_pipe,
+            "./ip-adapter/ip-adapter_sdxl_vit-h.safetensors",
+            clip_vision_model="h94/IP-Adapter",
+            subfolder="sdxl_models",
+            dtype=torch.float16
+        )
 
     def setup(self, weights: Optional[Path] = None):
         start = time.time()

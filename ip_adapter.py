@@ -1,7 +1,7 @@
 import torch
+import torch.nn as nn
 from PIL import Image
 from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
-from diffusers.models import ImageProjection
 
 class IPAdapterPlus:
     def __init__(self, pipe, ip_ckpt, clip_vision_model="h94/IP-Adapter", subfolder="sdxl_models", dtype=torch.float16):
@@ -11,19 +11,21 @@ class IPAdapterPlus:
         
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(clip_vision_model, subfolder=subfolder).to(self.device, dtype)
         self.feature_extractor = CLIPImageProcessor.from_pretrained(clip_vision_model, subfolder=subfolder)
-        self.image_proj_model = ImageProjection(cross_attention_dim=pipe.unet.config.cross_attention_dim, image_embed_dim=1280).to(self.device, dtype)
+        
+        # Custom implementation of ImageProjection
+        self.image_proj_model = nn.Linear(self.image_encoder.config.hidden_size, pipe.unet.config.cross_attention_dim).to(self.device, dtype)
         
         self.load_ip_adapter(ip_ckpt)
         
     def load_ip_adapter(self, ckpt):
         state_dict = torch.load(ckpt, map_location="cpu")
         self.image_proj_model.load_state_dict(state_dict["image_proj"])
-        ip_layers = torch.nn.ModuleList(self.pipe.unet.attn_processors.values())
+        ip_layers = nn.ModuleList(self.pipe.unet.attn_processors.values())
         ip_layers.load_state_dict(state_dict["ip_adapter"])
         
     def set_scale(self, scale):
         for attn_processor in self.pipe.unet.attn_processors.values():
-            if isinstance(attn_processor, torch.nn.Module):
+            if isinstance(attn_processor, nn.Module):
                 attn_processor.scale = scale
             
     def generate(self, ip_adapter_image, **kwargs):
