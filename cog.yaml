@@ -9,6 +9,7 @@ build:
     - "libgl1-mesa-glx"
     - "libsm6"
     - "libxext6"
+    - "curl"
   python_packages:
     - "diffusers==0.21.4"
     - "torch==2.0.1"

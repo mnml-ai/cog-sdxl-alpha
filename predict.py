@@ -43,7 +43,7 @@ REFINER_URL = (
 )
 SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
 
-IP_ADAPTER_URL = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin?download=true"
+IP_ADAPTER_URL = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin"
 
 class KarrasDPM:
     def from_config(config):
@@ -83,10 +83,11 @@ class Predictor(BasePredictor):
 
     def load_ip_adapter(self):
         print("Loading IP-Adapter...")
-        WeightsDownloader.download_if_not_exists(IP_ADAPTER_URL, "./ip-adapter")
+        ip_adapter_path = "./ip-adapter/ip-adapter_sdxl_vit-h.bin"
+        WeightsDownloader.download_if_not_exists(IP_ADAPTER_URL, ip_adapter_path)
         self.ip_adapter = IPAdapterPlus(
             self.txt2img_pipe,
-            "./ip-adapter/ip-adapter_sdxl_vit-h.bin",
+            ip_adapter_path,
             clip_vision_model="h94/IP-Adapter",
             subfolder="sdxl_models",
             dtype=torch.float16

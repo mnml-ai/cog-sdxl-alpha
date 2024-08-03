@@ -2,7 +2,6 @@ import subprocess
 import time
 import os
 
-
 class WeightsDownloader:
     @staticmethod
     def download_if_not_exists(url, dest):
@@ -14,5 +13,10 @@ class WeightsDownloader:
         start = time.time()
         print("downloading url: ", url)
         print("downloading to: ", dest)
-        subprocess.check_call(["pget", "-x", url, dest], close_fds=False)
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        
+        # Use curl to download the file
+        subprocess.check_call(["curl", "-L", url, "-o", dest], close_fds=False)
         print("downloading took: ", time.time() - start)
