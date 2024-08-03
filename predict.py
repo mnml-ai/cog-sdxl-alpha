@@ -29,15 +29,13 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
-from diffusers.utils import load_image
-import requests
-from PIL import Image
 import sys
 sys.path.extend(['/IP-Adapter'])
-from ip_adapter.ip_adapter import IPAdapterXL
+from ip_adapter import IPAdapterPlusXL
 
-# Add this constant
-IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder/"
+IP_ADAPTER_IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder"
+IP_ADAPTER_SDXL_PATH = "/IP-Adapter/sdxl_models/ip-adapter_sdxl_vit-h.bin"
+
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
 SAFETY_CACHE = "./safety-cache"
@@ -66,20 +64,6 @@ SCHEDULERS = {
 
 
 class Predictor(BasePredictor):
-    def load_ip_adapter(self):
-        ip_adapter_path = "ip-adapter_sdxl_vit-h.bin"
-        if not os.path.exists(ip_adapter_path):
-            print("Downloading IP Adapter...")
-            url = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin"
-            response = requests.get(url)
-            if response.status_code == 200:
-                with open(ip_adapter_path, 'wb') as f:
-                    f.write(response.content)
-            else:
-                raise Exception(f"Failed to download IP-Adapter weights. Status code: {response.status_code}")
-
-        self.ip_adapter = IPAdapterXL(self.txt2img_pipe, IMAGE_ENCODER_PATH, ip_adapter_path, "cuda", num_tokens=4)
-
     def load_trained_weights(self, weights, pipe):
         self.weights_manager.load_trained_weights(weights, pipe)
 
@@ -114,8 +98,6 @@ class Predictor(BasePredictor):
         if str(weights) == "weights":
             weights = None
 
-        print("setup took: ", time.time() - start)
-
         print("Loading safety checker...")
         WeightsDownloader.download_if_not_exists(SAFETY_URL, SAFETY_CACHE)
 
@@ -138,7 +120,6 @@ class Predictor(BasePredictor):
             self.load_trained_weights(weights, self.txt2img_pipe)
 
         self.txt2img_pipe.to("cuda")
-        self.load_ip_adapter()
 
         print("Loading SDXL img2img pipeline...")
         self.img2img_pipe = StableDiffusionXLImg2ImgPipeline(
@@ -165,6 +146,11 @@ class Predictor(BasePredictor):
         self.inpaint_pipe.to("cuda")
 
         print("Loading SDXL refiner pipeline...")
+        # FIXME(ja): should the vae/text_encoder_2 be loaded from SDXL always?
+        #            - in the case of fine-tuned SDXL should we still?
+        # FIXME(ja): if the answer to above is use VAE/Text_Encoder_2 from fine-tune
+        #            what does this imply about lora + refiner? does the refiner need to know about
+
         WeightsDownloader.download_if_not_exists(REFINER_URL, REFINER_MODEL_CACHE)
 
         print("Loading refiner pipeline...")
@@ -179,6 +165,15 @@ class Predictor(BasePredictor):
         self.refiner.to("cuda")
 
         self.controlnet = ControlNet(self)
+
+        print("Loading IP-Adapter...")
+        self.ip_adapter = IPAdapterPlusXL(
+            self.txt2img_pipe,
+            IP_ADAPTER_IMAGE_ENCODER_PATH,
+            IP_ADAPTER_SDXL_PATH,
+            "cuda",
+            num_tokens=16
+        )
 
         print("setup took: ", time.time() - start)
 
@@ -196,16 +191,6 @@ class Predictor(BasePredictor):
     @torch.inference_mode()
     def predict(
         self,
-        ip_adapter_image: Path = Input(
-            description="Input image for IP Adapter",
-            default=None,
-        ),
-        ip_adapter_scale: float = Input(
-            description="Scale for IP Adapter conditioning",
-            ge=0.0,
-            le=1.0,
-            default=0.5,
-        ),
         prompt: str = Input(
             description="Input prompt",
             default="An astronaut riding a rainbow unicorn",
@@ -376,6 +361,16 @@ class Predictor(BasePredictor):
             le=1.0,
             default=1.0,
         ),
+        ip_adapter_image: Path = Input(
+            description="Input image for IP-Adapter",
+            default=None,
+        ),
+        ip_adapter_scale: float = Input(
+            description="Scale for IP-Adapter conditioning",
+            ge=0.0,
+            le=1.0,
+            default=0.7,
+        ),
     ) -> List[Path]:
         """Run a single prediction on the model."""
         predict_start = time.time()
@@ -383,16 +378,6 @@ class Predictor(BasePredictor):
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
-
-        generator = torch.Generator("cuda").manual_seed(seed)
-
-        common_args = {
-            "prompt": [prompt] * num_outputs,
-            "negative_prompt": [negative_prompt] * num_outputs,
-            "guidance_scale": guidance_scale,
-            "generator": generator,
-            "num_inference_steps": num_inference_steps,
-        }
 
         resize_start = time.time()
         (
@@ -440,6 +425,12 @@ class Predictor(BasePredictor):
         controlnet = (
             controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
         )
+
+        if ip_adapter_image:
+            ip_image = Image.open(ip_adapter_image).convert("RGB")
+            ip_image = ip_image.resize((224, 224))
+            sdxl_kwargs["ip_adapter_image"] = ip_image
+            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
 
         controlnet_args = {}
         control_images = []
@@ -535,7 +526,24 @@ class Predictor(BasePredictor):
         if refine == "base_image_refiner":
             sdxl_kwargs["output_type"] = "latent"
 
-        # img2img pipeline doesn't accept width/height
+        if not apply_watermark:
+            # toggles watermark for this prediction
+            watermark_cache = pipe.watermark
+            pipe.watermark = None
+            self.refiner.watermark = None
+
+        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
+        generator = torch.Generator("cuda").manual_seed(seed)
+
+        common_args = {
+            "prompt": [prompt] * num_outputs,
+            "negative_prompt": [negative_prompt] * num_outputs,
+            "guidance_scale": guidance_scale,
+            "generator": generator,
+            "num_inference_steps": num_inference_steps,
+        }
+
+        # img2img pipeline doesn’t accept width/height
         # (img2img with controlnet does)
         if controlnet or not img2img:
             common_args["width"] = width
@@ -544,46 +552,17 @@ class Predictor(BasePredictor):
         if self.is_lora:
             sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
 
-        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-
-        if not apply_watermark:
-            # toggles watermark for this prediction
-            watermark_cache = pipe.watermark
-            pipe.watermark = None
-            self.refiner.watermark = None
-
-        if ip_adapter_image is not None and os.path.isfile(ip_adapter_image):
-            try:
-                print("Using IP-Adapter pipeline")
-                ip_image = Image.open(ip_adapter_image).convert('RGB')
-                ip_image = ip_image.resize((512, 512))
-                
-                # Patch the pipeline with IP Adapter
-                self.ip_adapter.set_scale(ip_adapter_scale)
-                images = self.ip_adapter.generate(
-                    pil_image=ip_image,
-                    num_samples=num_outputs,
-                    seed=seed,
-                    **common_args,
-                    **sdxl_kwargs,
-                    **controlnet_args
-                )
-                output = type('obj', (object,), {'images': images})()
-            except Exception as e:
-                print(f"Error processing IP-Adapter image: {str(e)}")
-                # Fallback to normal pipeline if IP-Adapter fails
-                inference_start = time.time()
-                output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-                print(f"inference took: {time.time() - inference_start:.2f}s")
+        inference_start = time.time()
+        
+        if ip_adapter_image:
+            output = self.ip_adapter.generate(
+                **common_args,
+                **sdxl_kwargs,
+                **controlnet_args
+            )
         else:
-            # Your existing logic for non-IP-Adapter cases
-            inference_start = time.time()
             output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-            print(f"inference took: {time.time() - inference_start:.2f}s")
-
-        if not apply_watermark:
-            pipe.watermark = watermark_cache
-            self.refiner.watermark = watermark_cache
+        print(f"inference took: {time.time() - inference_start:.2f}s")
 
         if refine == "base_image_refiner":
             refiner_kwargs = {
@@ -594,10 +573,14 @@ class Predictor(BasePredictor):
                 k: v for k, v in common_args.items() if k not in ["width", "height"]
             }
 
-            if refine_steps:
+            if refine == "base_image_refiner" and refine_steps:
                 common_args_without_dimensions["num_inference_steps"] = refine_steps
 
             output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
+
+        if not apply_watermark:
+            pipe.watermark = watermark_cache
+            self.refiner.watermark = watermark_cache
 
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
@@ -624,10 +607,5 @@ class Predictor(BasePredictor):
                 "NSFW content detected. Try running it again, or try a different prompt."
             )
 
-        if ip_adapter_image is not None:
-            # Reset the pipeline to its original state
-            pipe = self.txt2img_pipe  # or whichever pipeline you started with
-
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
-            
