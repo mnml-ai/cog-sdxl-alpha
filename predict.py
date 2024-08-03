@@ -30,9 +30,14 @@ from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
 from diffusers.utils import load_image
-from ip_adapter.ip_adapter import IPAdapterXL
 import requests
 
+import sys
+sys.path.extend(['/IP-Adapter'])
+from ip_adapter.ip_adapter import IPAdapterXL
+
+# Add this constant
+IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder/"
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
 SAFETY_CACHE = "./safety-cache"
@@ -76,13 +81,7 @@ class Predictor(BasePredictor):
             else:
                 raise Exception(f"Failed to download IP-Adapter weights. Status code: {response.status_code}")
 
-        self.ip_adapter = IPAdapterXL(
-            self.txt2img_pipe,
-            ip_adapter_path,
-            "cuda",
-            num_tokens=4,
-            ip_ckpt=ip_adapter_path  # Add this line
-        )
+        self.ip_adapter = IPAdapterXL(self.txt2img_pipe, IMAGE_ENCODER_PATH, ip_adapter_path, "cuda", num_tokens=4)
 
     def load_trained_weights(self, weights, pipe):
         self.weights_manager.load_trained_weights(weights, pipe)
@@ -444,14 +443,26 @@ class Predictor(BasePredictor):
         if ip_adapter_image:
             ip_image = load_image(ip_adapter_image)
             ip_image = ip_image.resize((512, 512))
-            sdxl_kwargs["ip_adapter_image"] = ip_image
-            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
             
             # Patch the pipeline with IP Adapter
-            self.ip_adapter.patch_pipe(
-                pipe,
-                scale=ip_adapter_scale,
-            )
+            self.ip_adapter.set_scale(ip_adapter_scale)
+            images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                **sdxl_kwargs,
+                **controlnet_args
+    )
+    output = type('obj', (object,), {'images': images})()
+else:
+    # Your existing logic for non-IP-Adapter cases
+    inference_start = time.time()
+    output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+    print(f"inference took: {time.time() - inference_start:.2f}s")
 
         controlnet_args = {}
         control_images = []
