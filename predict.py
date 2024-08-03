@@ -76,7 +76,13 @@ class Predictor(BasePredictor):
             else:
                 raise Exception(f"Failed to download IP-Adapter weights. Status code: {response.status_code}")
 
-        self.ip_adapter = IPAdapterXL(self.txt2img_pipe, ip_adapter_path, device="cuda", num_tokens=4)
+        self.ip_adapter = IPAdapterXL(
+            self.txt2img_pipe,
+            ip_adapter_path,
+            "cuda",
+            num_tokens=4,
+            ip_ckpt=ip_adapter_path  # Add this line
+        )
 
     def load_trained_weights(self, weights, pipe):
         self.weights_manager.load_trained_weights(weights, pipe)
