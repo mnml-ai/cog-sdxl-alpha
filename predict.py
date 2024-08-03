@@ -31,6 +31,7 @@ from sizing_strategy import SizingStrategy
 
 from diffusers.utils import load_image
 from ip_adapter.ip_adapter import IPAdapterXL
+import requests
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -61,12 +62,20 @@ SCHEDULERS = {
 
 class Predictor(BasePredictor):
 
+ 
+
     def load_ip_adapter(self):
         ip_adapter_path = "ip-adapter_sdxl_vit-h.bin"
         if not os.path.exists(ip_adapter_path):
             print("Downloading IP Adapter...")
-            WeightsDownloader.download("https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin?download=true", ip_adapter_path)
-        
+            url = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin"
+            response = requests.get(url)
+            if response.status_code == 200:
+                with open(ip_adapter_path, 'wb') as f:
+                    f.write(response.content)
+            else:
+                raise Exception(f"Failed to download IP-Adapter weights. Status code: {response.status_code}")
+
         self.ip_adapter = IPAdapterXL(self.txt2img_pipe, ip_adapter_path, device="cuda", num_tokens=4)
 
     def load_trained_weights(self, weights, pipe):
