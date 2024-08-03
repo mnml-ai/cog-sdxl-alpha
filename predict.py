@@ -440,29 +440,7 @@ class Predictor(BasePredictor):
             controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
         )
 
-        if ip_adapter_image:
-            ip_image = load_image(ip_adapter_image)
-            ip_image = ip_image.resize((512, 512))
-            
-            # Patch the pipeline with IP Adapter
-            self.ip_adapter.set_scale(ip_adapter_scale)
-            images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
-                **sdxl_kwargs,
-                **controlnet_args
-            )
-            output = type('obj', (object,), {'images': images})()
-        else:
-            # Your existing logic for non-IP-Adapter cases
-            inference_start = time.time()
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-            print(f"inference took: {time.time() - inference_start:.2f}s")
+        
 
         controlnet_args = {}
         control_images = []
@@ -558,6 +536,30 @@ class Predictor(BasePredictor):
         if refine == "base_image_refiner":
             sdxl_kwargs["output_type"] = "latent"
 
+        if ip_adapter_image:
+            ip_image = load_image(ip_adapter_image)
+            ip_image = ip_image.resize((512, 512))
+            
+            # Patch the pipeline with IP Adapter
+            self.ip_adapter.set_scale(ip_adapter_scale)
+            images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                **sdxl_kwargs,
+                **controlnet_args
+            )
+            output = type('obj', (object,), {'images': images})()
+        else:
+            # Your existing logic for non-IP-Adapter cases
+            inference_start = time.time()
+            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+            print(f"inference took: {time.time() - inference_start:.2f}s")
+            
         if not apply_watermark:
             # toggles watermark for this prediction
             watermark_cache = pipe.watermark
