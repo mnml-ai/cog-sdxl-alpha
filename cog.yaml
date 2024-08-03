@@ -23,6 +23,8 @@ build:
     - "mediapipe==0.10.8"
     - "timm==0.6.13"
     - "transformers==4.31.0"
+    - "opencv-python==4.7.0.72"
+    - "git+https://github.com/tencent-ailab/IP-Adapter.git"
 
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.5.6/pget_linux_x86_64" && chmod +x /usr/local/bin/pget

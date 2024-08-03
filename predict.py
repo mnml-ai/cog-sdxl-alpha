@@ -30,7 +30,7 @@ from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
 from diffusers.utils import load_image
-from ip_adapter import IPAdapterXL
+from ip_adapter.ip_adapter import IPAdapterXL
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -66,8 +66,8 @@ class Predictor(BasePredictor):
         if not os.path.exists(ip_adapter_path):
             print("Downloading IP Adapter...")
             WeightsDownloader.download("https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter_sdxl_vit-h.bin?download=true", ip_adapter_path)
-    
-        self.ip_adapter = IPAdapterXL(self.txt2img_pipe, ip_adapter_path, device="cuda")
+        
+        self.ip_adapter = IPAdapterXL(self.txt2img_pipe, ip_adapter_path, device="cuda", num_tokens=4)
 
     def load_trained_weights(self, weights, pipe):
         self.weights_manager.load_trained_weights(weights, pipe)
