@@ -590,16 +590,17 @@ class Predictor(BasePredictor):
         # Initialize output to None at the beginning
         output = None
 
+        # Handle the case when neither ControlNet nor IP-Adapter is used
         if not controlnet and not ip_adapter_image:
             print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
             output = pipe(**common_args, **sdxl_kwargs)  # Run the standard pipeline
         else:
+            # Process ControlNet pipeline if provided
             if controlnet:
-                # Use ControlNet pipeline
                 output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
 
+            # Process IP-Adapter image input if provided
             if ip_adapter_image:
-                # Process IP-Adapter image first
                 ip_image = Image.open(ip_adapter_image).convert("RGB").resize((224, 224))
                 ip_adapter_images = self.ip_adapter.generate(
                     pil_image=ip_image,
@@ -612,39 +613,35 @@ class Predictor(BasePredictor):
                     scale=ip_adapter_scale,
                 )
 
+                # If both ControlNet and IP-Adapter are used, blend the results
                 if controlnet:
-                    # Combine outputs from both IP-Adapter and ControlNet into the final image
                     combined_output = [
                         Image.blend(ip_img, cn_img, alpha=0.5)
                         for ip_img, cn_img in zip(ip_adapter_images, output.images)
                     ]
                     output.images = combined_output
                 else:
-                    # If only IP-Adapter is used, assign its output
+                    # If only IP-Adapter is used, assign its output directly
                     output = SimpleNamespace(images=ip_adapter_images)
 
         # Ensure `output` has been assigned, otherwise raise an error
         if output is None:
             raise ValueError("The output variable was not initialized correctly.")
 
-        # Continue with safety checking and saving the output
-        if not apply_watermark:
-            pipe.watermark = watermark_cache
-            self.refiner.watermark = watermark_cache
+        # Optionally refine the generated images if requested
+        if refine == "base_image_refiner":
+            refiner_kwargs = {
+                "image": output.images,
+            }
+            output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
 
+        # Continue with safety checking and saving the output
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
         output_paths = []
 
-        # Save controlnet images (if any)
-        if controlnet:
-            for i, image in enumerate(control_images):
-                output_path = f"/tmp/control-{i}.png"
-                image.save(output_path)
-                output_paths.append(Path(output_path))
-
-        # Save the output images
+        # Save the generated output images
         for i, image in enumerate(output.images):
             if not disable_safety_checker and has_nsfw_content[i]:
                 print(f"NSFW content detected in image {i}")
@@ -653,8 +650,8 @@ class Predictor(BasePredictor):
             image.save(output_path)
             output_paths.append(Path(output_path))
 
+        # Return the saved image paths
         if len(output_paths) == 0:
             raise Exception("NSFW content detected. Try running it again, or try a different prompt.")
 
-        print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
