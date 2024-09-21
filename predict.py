@@ -545,26 +545,23 @@ class Predictor(BasePredictor):
 
         inference_start = time.time()
 
+        # IP-Adapter integration
         if ip_adapter_image:
-            # Process IP-Adapter image first
             ip_image = Image.open(ip_adapter_image).convert("RGB")
             ip_image = ip_image.resize((224, 224))
-            ip_adapter_images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
-                scale=ip_adapter_scale,
-            )
-            # Feed IP-Adapter output into ControlNet if img2img or inpainting
-            common_args["image"] = ip_adapter_images
+            ip_adapter_images = self.ip_adapter.preprocess(ip_image, num_samples=num_outputs)
+            sdxl_kwargs["ip_adapter_image"] = ip_adapter_images
+            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
 
+        # Perform the main inference
+        output = pipe(
+            **common_args,
+            **sdxl_kwargs,
+            **controlnet_args
+        )
 
-        
         print(f"inference took: {time.time() - inference_start:.2f}s")
+
 
         if refine == "base_image_refiner":
             refiner_kwargs = {
@@ -575,61 +572,11 @@ class Predictor(BasePredictor):
                 k: v for k, v in common_args.items() if k not in ["width", "height"]
             }
 
-            if refine == "base_image_refiner" and refine_steps:
+            if refine_steps:
                 common_args_without_dimensions["num_inference_steps"] = refine_steps
 
             output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
 
-        if not apply_watermark:
-            pipe.watermark = watermark_cache
-            self.refiner.watermark = watermark_cache
-
-        if not disable_safety_checker:
-            _, has_nsfw_content = self.run_safety_checker(output.images)
-
-        # Initialize output to None at the beginning
-        output = None
-
-        # Default to standard pipeline if neither ControlNet nor IP-Adapter is used
-        if not controlnet and not ip_adapter_image:
-            print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
-            output = pipe(**common_args, **sdxl_kwargs)
-
-        # Check if ControlNet is used
-        if controlnet:
-            controlnet_args["control_image"] = control_images
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-
-        # Check if IP-Adapter image is provided
-        if ip_adapter_image:
-            # Load and process the IP-Adapter image
-            ip_image = Image.open(ip_adapter_image).convert("RGB").resize((224, 224))
-            ip_adapter_images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
-                scale=ip_adapter_scale,
-            )
-
-            # If ControlNet was used, combine the outputs, otherwise use IP-Adapter directly
-            if controlnet:
-                combined_output = [
-                    Image.blend(ip_img, cn_img, alpha=0.5)
-                    for ip_img, cn_img in zip(ip_adapter_images, output.images)
-                ]
-                output.images = combined_output
-            else:
-                output = SimpleNamespace(images=ip_adapter_images)
-
-        # Ensure `output` has been assigned
-        if output is None:
-            raise ValueError("The output variable was not initialized correctly.")
-
-        # Proceed to the safety checker and refinement process
         if not apply_watermark:
             pipe.watermark = watermark_cache
             self.refiner.watermark = watermark_cache
