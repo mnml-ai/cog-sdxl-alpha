@@ -509,10 +509,11 @@ class Predictor(BasePredictor):
             try:
                 if self.ip_adapter is None:
                     self.ip_adapter = IPAdapter(pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
-                ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
-                sdxl_kwargs["ip_adapter_image"] = ip_adapter_image
-                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
                 self.ip_adapter.apply_to_pipeline(pipe)
+                ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
+                image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
+                sdxl_kwargs["image_embeds"] = image_embeds
+                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
             except Exception as e:
                 print(f"Error loading IP Adapter: {str(e)}")
                 print("Continuing without IP Adapter")
@@ -582,7 +583,6 @@ class Predictor(BasePredictor):
 
         # New code to unapply IP Adapter
         if self.ip_adapter:
-            self.ip_adapter.unapply_from_pipeline(pipe)
             self.ip_adapter.unload()
             self.ip_adapter = None
 

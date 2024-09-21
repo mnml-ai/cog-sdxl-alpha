@@ -28,6 +28,8 @@ class IPAdapter:
             self.image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
         
     def unload(self):
+        if hasattr(self.pipe, 'orig_unet'):
+            self.pipe.unet = self.pipe.orig_unet
         del self.ip_adapter
         del self.image_encoder
         del self.image_processor
@@ -40,14 +42,15 @@ class IPAdapter:
         if self.image_processor is None:
             self.load()
         image = Image.open(image_path).convert("RGB")
-        image = self.image_processor(image, return_tensors="pt").pixel_values
+        image = self.image_processor(images=image, return_tensors="pt").pixel_values
         return image.to("cuda", dtype=torch.float16)
         
     def apply_to_pipeline(self, pipe):
         self.load()
-        pipe.unet = self.ip_adapter.adapt_unet(pipe.unet)
+        if not hasattr(pipe, 'orig_unet'):
+            pipe.orig_unet = pipe.unet
+        pipe.unet = self.ip_adapter.get_unet(pipe.unet)
         pipe.image_encoder = self.image_encoder
         
-    def unapply_from_pipeline(self, pipe):
-        pipe.unet = self.ip_adapter.unadapt_unet(pipe.unet)
-        pipe.image_encoder = None
+    def encode_image(self, image):
+        return self.image_encoder(image).image_embeds

@@ -24,6 +24,7 @@ build:
     # New package for IP Adapter
     - "timm==0.6.13"
 
+
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.5.6/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
 
