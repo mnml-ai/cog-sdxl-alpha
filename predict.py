@@ -29,7 +29,6 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
-from ip_adapter import IPAdapter
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -161,9 +160,6 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
-        print("Loading IP Adapter...")
-        self.ip_adapter = IPAdapter(SDXL_MODEL_CACHE, "./ip-adapter-sdxl-cache")
-
         print("setup took: ", time.time() - start)
 
     def run_safety_checker(self, image):
@@ -180,25 +176,176 @@ class Predictor(BasePredictor):
     @torch.inference_mode()
     def predict(
         self,
-        prompt: str = Input(description="Input prompt", default="An astronaut riding a rainbow unicorn"),
-        negative_prompt: str = Input(description="Negative Prompt", default=""),
-        image: Path = Input(description="Input image for img2img or inpaint mode", default=None),
-        mask: Path = Input(description="Input mask for inpaint mode. Black areas will be preserved, white areas will be inpainted.", default=None),
-        width: int = Input(description="Width of output image", default=768),
-        height: int = Input(description="Height of output image", default=768),
-        num_outputs: int = Input(description="Number of images to output", ge=1, le=4, default=1),
-        scheduler: str = Input(description="scheduler", choices=SCHEDULERS.keys(), default="K_EULER"),
-        num_inference_steps: int = Input(description="Number of denoising steps", ge=1, le=500, default=30),
-        guidance_scale: float = Input(description="Scale for classifier-free guidance", ge=1, le=50, default=7.5),
-        prompt_strength: float = Input(description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image", ge=0.0, le=1.0, default=0.8),
-        seed: int = Input(description="Random seed. Leave blank to randomize the seed", default=None),
-        apply_watermark: bool = Input(description="Applies a watermark to enable determining if an image is generated in downstream applications. If you have other provisions for generating or deploying images safely, you can use this to disable watermarking.", default=False),
-        disable_safety_checker: bool = Input(description="Disable safety checker for generated images. This feature is only available through the API.", default=False),
-        controlnet_1: str = Input(description="Controlnet", choices=ControlNet.CONTROLNET_MODELS, default="none"),
-        controlnet_1_image: Path = Input(description="Input image for first controlnet", default=None),
-        controlnet_1_conditioning_scale: float = Input(description="How strong the controlnet conditioning is", ge=0.0, le=4.0, default=0.75),
-        use_ip_adapter: bool = Input(description="Use IP Adapter for image-conditioned generation", default=False),
-        ip_adapter_image: Path = Input(description="Input image for IP Adapter", default=None),
+        prompt: str = Input(
+            description="Input prompt",
+            default="An astronaut riding a rainbow unicorn",
+        ),
+        negative_prompt: str = Input(
+            description="Negative Prompt",
+            default="",
+        ),
+        image: Path = Input(
+            description="Input image for img2img or inpaint mode",
+            default=None,
+        ),
+        mask: Path = Input(
+            description="Input mask for inpaint mode. Black areas will be preserved, white areas will be inpainted.",
+            default=None,
+        ),
+        width: int = Input(
+            description="Width of output image",
+            default=768,
+        ),
+        height: int = Input(
+            description="Height of output image",
+            default=768,
+        ),
+        sizing_strategy: str = Input(
+            description="Decide how to resize images – use width/height, resize based on input image or control image",
+            choices=[
+                "width_height",
+                "input_image",
+                "controlnet_1_image",
+                "controlnet_2_image",
+                "controlnet_3_image",
+                "mask_image",
+            ],
+            default="width_height",
+        ),
+        num_outputs: int = Input(
+            description="Number of images to output",
+            ge=1,
+            le=4,
+            default=1,
+        ),
+        scheduler: str = Input(
+            description="scheduler",
+            choices=SCHEDULERS.keys(),
+            default="K_EULER",
+        ),
+        num_inference_steps: int = Input(
+            description="Number of denoising steps", ge=1, le=500, default=30
+        ),
+        guidance_scale: float = Input(
+            description="Scale for classifier-free guidance", ge=1, le=50, default=7.5
+        ),
+        prompt_strength: float = Input(
+            description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image",
+            ge=0.0,
+            le=1.0,
+            default=0.8,
+        ),
+        seed: int = Input(
+            description="Random seed. Leave blank to randomize the seed", default=None
+        ),
+        refine: str = Input(
+            description="Which refine style to use",
+            choices=["no_refiner", "base_image_refiner"],
+            default="no_refiner",
+        ),
+        refine_steps: int = Input(
+            description="For base_image_refiner, the number of steps to refine, defaults to num_inference_steps",
+            default=None,
+        ),
+        apply_watermark: bool = Input(
+            description="Applies a watermark to enable determining if an image is generated in downstream applications. If you have other provisions for generating or deploying images safely, you can use this to disable watermarking.",
+            default=False,
+        ),
+        lora_scale: float = Input(
+            description="LoRA additive scale. Only applicable on trained models.",
+            ge=0.0,
+            le=1.0,
+            default=0.6,
+        ),
+        lora_weights: str = Input(
+            description="Replicate LoRA weights to use. Leave blank to use the default weights.",
+            default=None,
+        ),
+        disable_safety_checker: bool = Input(
+            description="Disable safety checker for generated images. This feature is only available through the API.",
+            default=False,
+        ),
+        controlnet_1: str = Input(
+            description="Controlnet",
+            choices=ControlNet.CONTROLNET_MODELS,
+            default="none",
+        ),
+        controlnet_1_image: Path = Input(
+            description="Input image for first controlnet",
+            default=None,
+        ),
+        controlnet_1_conditioning_scale: float = Input(
+            description="How strong the controlnet conditioning is",
+            ge=0.0,
+            le=4.0,
+            default=0.75,
+        ),
+        controlnet_1_start: float = Input(
+            description="When controlnet conditioning starts",
+            ge=0.0,
+            le=1.0,
+            default=0.0,
+        ),
+        controlnet_1_end: float = Input(
+            description="When controlnet conditioning ends",
+            ge=0.0,
+            le=1.0,
+            default=1.0,
+        ),
+        controlnet_2: str = Input(
+            description="Controlnet",
+            choices=ControlNet.CONTROLNET_MODELS,
+            default="none",
+        ),
+        controlnet_2_image: Path = Input(
+            description="Input image for second controlnet",
+            default=None,
+        ),
+        controlnet_2_conditioning_scale: float = Input(
+            description="How strong the controlnet conditioning is",
+            ge=0.0,
+            le=4.0,
+            default=0.75,
+        ),
+        controlnet_2_start: float = Input(
+            description="When controlnet conditioning starts",
+            ge=0.0,
+            le=1.0,
+            default=0.0,
+        ),
+        controlnet_2_end: float = Input(
+            description="When controlnet conditioning ends",
+            ge=0.0,
+            le=1.0,
+            default=1.0,
+        ),
+        controlnet_3: str = Input(
+            description="Controlnet",
+            choices=ControlNet.CONTROLNET_MODELS,
+            default="none",
+        ),
+        controlnet_3_image: Path = Input(
+            description="Input image for third controlnet",
+            default=None,
+        ),
+        controlnet_3_conditioning_scale: float = Input(
+            description="How strong the controlnet conditioning is",
+            ge=0.0,
+            le=4.0,
+            default=0.75,
+        ),
+        controlnet_3_start: float = Input(
+            description="When controlnet conditioning starts",
+            ge=0.0,
+            le=1.0,
+            default=0.0,
+        ),
+        controlnet_3_end: float = Input(
+            description="When controlnet conditioning ends",
+            ge=0.0,
+            le=1.0,
+            default=1.0,
+        ),
     ) -> List[Path]:
         """Run a single prediction on the model."""
         predict_start = time.time()
@@ -269,6 +416,20 @@ class Predictor(BasePredictor):
                     controlnet_1_end,
                     controlnet_1_image,
                 ),
+                (
+                    controlnet_2,
+                    controlnet_2_conditioning_scale,
+                    controlnet_2_start,
+                    controlnet_2_end,
+                    controlnet_2_image,
+                ),
+                (
+                    controlnet_3,
+                    controlnet_3_conditioning_scale,
+                    controlnet_3_start,
+                    controlnet_3_end,
+                    controlnet_3_image,
+                ),
             ]
 
             controlnet_preprocess_start = time.time()
@@ -331,6 +492,9 @@ class Predictor(BasePredictor):
             sdxl_kwargs["image"] = image
             sdxl_kwargs["strength"] = prompt_strength
 
+        if refine == "base_image_refiner":
+            sdxl_kwargs["output_type"] = "latent"
+
         if not apply_watermark:
             # toggles watermark for this prediction
             watermark_cache = pipe.watermark
@@ -348,28 +512,32 @@ class Predictor(BasePredictor):
             "num_inference_steps": num_inference_steps,
         }
 
-        # img2img pipeline doesn't accept width/height
+        # img2img pipeline doesn’t accept width/height
         # (img2img with controlnet does)
         if controlnet or not img2img:
             common_args["width"] = width
             common_args["height"] = height
 
-        if use_ip_adapter and ip_adapter_image:
-            print("Using IP Adapter for image-conditioned generation")
-            ip_adapter_output = self.ip_adapter.generate_image(
-                prompt=prompt,
-                image=ip_adapter_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                guidance_scale=guidance_scale,
-                negative_prompt=negative_prompt,
-            )
-            output = ip_adapter_output
-        else:
-            inference_start = time.time()
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-            print(f"inference took: {time.time() - inference_start:.2f}s")
+        if self.is_lora:
+            sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
+
+        inference_start = time.time()
+        output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+        print(f"inference took: {time.time() - inference_start:.2f}s")
+
+        if refine == "base_image_refiner":
+            refiner_kwargs = {
+                "image": output.images,
+            }
+
+            common_args_without_dimensions = {
+                k: v for k, v in common_args.items() if k not in ["width", "height"]
+            }
+
+            if refine == "base_image_refiner" and refine_steps:
+                common_args_without_dimensions["num_inference_steps"] = refine_steps
+
+            output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
 
         if not apply_watermark:
             pipe.watermark = watermark_cache
@@ -379,13 +547,13 @@ class Predictor(BasePredictor):
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
         output_paths = []
-        
+
         if controlnet:
             for i, image in enumerate(control_images):
                 output_path = f"/tmp/control-{i}.png"
                 image.save(output_path)
                 output_paths.append(Path(output_path))
-        
+
         for i, image in enumerate(output.images):
             if not disable_safety_checker:
                 if has_nsfw_content[i]:

@@ -5,7 +5,7 @@ from weights_downloader import WeightsDownloader
 
 CONTROLNET_MODEL_CACHE = "./controlnet-cache"
 CONTROLNET_URL = "https://weights.replicate.delivery/default/controlnet/sdxl-cn-canny-depth-softe-pose-qr.tar"
-CONTROLNET_UNION_URL = "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model.safetensors"
+
 
 class ControlNet:
     CONTROLNET_MODELS = [
@@ -19,32 +19,29 @@ class ControlNet:
         "lineart",
         "lineart_anime",
         "openpose",
-        "union",  # New ControlNet Union model
+        # Preprocessors without an XL model yet
+        # "straight_edge_mlsd",
+        # "face_detector",
+        # "content_shuffle",
+        # "normal_bae",
+        # "segementation_sam",
     ]
 
     def __init__(self, predictor):
         WeightsDownloader.download_if_not_exists(CONTROLNET_URL, CONTROLNET_MODEL_CACHE)
-        WeightsDownloader.download_if_not_exists(CONTROLNET_UNION_URL, f"{CONTROLNET_MODEL_CACHE}/controlnet_union_sdxl.safetensors")
         self.predictor = predictor
         self.controlnet_preprocessor = None
         self.models = {}
 
     def initialize_controlnet(self, model_name):
         print("Initializing", model_name)
-        if model_name == "union":
-            return ControlNetModel.from_pretrained(
-                f"{CONTROLNET_MODEL_CACHE}/controlnet_union_sdxl.safetensors",
-                torch_dtype=torch.float16
-            )
         return ControlNetModel.from_pretrained(
             model_name, cache_dir=CONTROLNET_MODEL_CACHE, torch_dtype=torch.float16
         )
 
     def get_model(self, controlnet_name):
         if controlnet_name not in self.models:
-            if controlnet_name == "union":
-                self.models[controlnet_name] = self.initialize_controlnet("union")
-            elif controlnet_name.startswith("edge_"):
+            if controlnet_name.startswith("edge_"):
                 self.models[controlnet_name] = self.initialize_controlnet("diffusers/controlnet-canny-sdxl-1.0")
             elif controlnet_name.startswith("depth_"):
                 self.models[controlnet_name] = self.initialize_controlnet("diffusers/controlnet-depth-sdxl-1.0-small")
