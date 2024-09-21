@@ -1,611 +1,135 @@
-import os
-import time
-from typing import List, Optional
-
-import numpy as np
-import torch
 from cog import BasePredictor, Input, Path
-from diffusers import (
-    DDIMScheduler,
-    DiffusionPipeline,
-    DPMSolverMultistepScheduler,
-    EulerAncestralDiscreteScheduler,
-    EulerDiscreteScheduler,
-    HeunDiscreteScheduler,
-    PNDMScheduler,
-    StableDiffusionXLImg2ImgPipeline,
-    StableDiffusionXLInpaintPipeline,
-    StableDiffusionXLControlNetPipeline,
-    StableDiffusionXLControlNetInpaintPipeline,
-    StableDiffusionXLControlNetImg2ImgPipeline,
-)
-
-from diffusers.pipelines.stable_diffusion.safety_checker import (
-    StableDiffusionSafetyChecker,
-)
-from transformers import CLIPImageProcessor
-from weights_downloader import WeightsDownloader
-from weights_manager import WeightsManager
-from controlnet import ControlNet
-from sizing_strategy import SizingStrategy
-
+import os
+import cv2
+import time
+import torch
+import shutil
+import numpy as np
 from PIL import Image
-import sys
-sys.path.extend(['/IP-Adapter'])
-from ip_adapter import IPAdapterPlusXL
+from diffusers import ControlNetModel, StableDiffusionXLControlNetPipeline, AutoencoderKL
+from diffusers.utils import load_image
 
-IP_ADAPTER_IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder"
-IP_ADAPTER_SDXL_PATH = "/IP-Adapter/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin"
-
-SDXL_MODEL_CACHE = "./sdxl-cache"
-REFINER_MODEL_CACHE = "./refiner-cache"
-SAFETY_CACHE = "./safety-cache"
-FEATURE_EXTRACTOR = "./feature-extractor"
-SDXL_URL = "https://weights.replicate.delivery/default/RealVisXL/RealVisXL_V3.0.tar"
-REFINER_URL = (
-    "https://weights.replicate.delivery/default/sdxl/refiner-no-vae-no-encoder-1.0.tar"
-)
-SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
-
-
-class KarrasDPM:
-    def from_config(config):
-        return DPMSolverMultistepScheduler.from_config(config, use_karras_sigmas=True)
-
-
-SCHEDULERS = {
-    "DDIM": DDIMScheduler,
-    "DPMSolverMultistep": DPMSolverMultistepScheduler,
-    "HeunDiscrete": HeunDiscreteScheduler,
-    "KarrasDPM": KarrasDPM,
-    "K_EULER_ANCESTRAL": EulerAncestralDiscreteScheduler,
-    "K_EULER": EulerDiscreteScheduler,
-    "PNDM": PNDMScheduler,
-}
+CONTROL_MODEL = "diffusers/controlnet-canny-sdxl-1.0"
+VAE_MODEL = "madebyollin/sdxl-vae-fp16-fix"
+MODEL_NAME = "stabilityai/stable-diffusion-xl-base-1.0"
+CONTROL_CACHE = "control-cache"
+VAE_CACHE = "vae-cache"
+MODEL_CACHE = "sdxl-cache"
 
 
 class Predictor(BasePredictor):
-    def load_trained_weights(self, weights, pipe):
-        self.weights_manager.load_trained_weights(weights, pipe)
-
-    def build_controlnet_pipeline(self, pipeline_class, controlnet_models):
-        pipe = pipeline_class.from_pretrained(
-            SDXL_MODEL_CACHE,
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-            variant="fp16",
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            text_encoder_2=self.txt2img_pipe.text_encoder_2,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            tokenizer_2=self.txt2img_pipe.tokenizer_2,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-            controlnet=self.controlnet.get_models(controlnet_models),
-        )
-
-        pipe.to("cuda")
-
-        return pipe
-
-    def setup(self, weights: Optional[Path] = None):
+    def setup(self):
         """Load the model into memory to make running multiple predictions efficient"""
-
-        start = time.time()
-        self.sizing_strategy = SizingStrategy()
-        self.weights_manager = WeightsManager(self)
-        self.tuned_model = False
-        self.tuned_weights = None
-        if str(weights) == "weights":
-            weights = None
-
-        print("Loading safety checker...")
-        WeightsDownloader.download_if_not_exists(SAFETY_URL, SAFETY_CACHE)
-
-        self.safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            SAFETY_CACHE, torch_dtype=torch.float16
-        ).to("cuda")
-        self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
-
-        WeightsDownloader.download_if_not_exists(SDXL_URL, SDXL_MODEL_CACHE)
-
-        print("Loading sdxl txt2img pipeline...")
-        self.txt2img_pipe = DiffusionPipeline.from_pretrained(
-            SDXL_MODEL_CACHE,
-            torch_dtype=torch.float16,
+        t1 = time.time()
+        print("Loading controlnet model")
+        controlnet = ControlNetModel.from_pretrained(
+            CONTROL_CACHE,
+            torch_dtype=torch.float16
+        )
+        print("Loading better VAE")
+        better_vae = AutoencoderKL.from_pretrained(
+            VAE_CACHE,
+            torch_dtype=torch.float16
+        )
+        print("Loading sdxl")
+        pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
+            MODEL_CACHE,
+            vae=better_vae,
+            controlnet=controlnet,
             use_safetensors=True,
             variant="fp16",
-        )
-        self.is_lora = False
-        if weights or os.path.exists("./trained-model"):
-            self.load_trained_weights(weights, self.txt2img_pipe)
-
-        self.txt2img_pipe.to("cuda")
-
-        print("Loading SDXL img2img pipeline...")
-        self.img2img_pipe = StableDiffusionXLImg2ImgPipeline(
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            text_encoder_2=self.txt2img_pipe.text_encoder_2,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            tokenizer_2=self.txt2img_pipe.tokenizer_2,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-        )
-        self.img2img_pipe.to("cuda")
-
-        print("Loading SDXL inpaint pipeline...")
-        self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            text_encoder_2=self.txt2img_pipe.text_encoder_2,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            tokenizer_2=self.txt2img_pipe.tokenizer_2,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-        )
-        self.inpaint_pipe.to("cuda")
-
-        print("Loading SDXL refiner pipeline...")
-        # FIXME(ja): should the vae/text_encoder_2 be loaded from SDXL always?
-        #            - in the case of fine-tuned SDXL should we still?
-        # FIXME(ja): if the answer to above is use VAE/Text_Encoder_2 from fine-tune
-        #            what does this imply about lora + refiner? does the refiner need to know about
-
-        WeightsDownloader.download_if_not_exists(REFINER_URL, REFINER_MODEL_CACHE)
-
-        print("Loading refiner pipeline...")
-        self.refiner = DiffusionPipeline.from_pretrained(
-            REFINER_MODEL_CACHE,
-            text_encoder_2=self.txt2img_pipe.text_encoder_2,
-            vae=self.txt2img_pipe.vae,
             torch_dtype=torch.float16,
-            use_safetensors=True,
-            variant="fp16",
         )
-        self.refiner.to("cuda")
+        self.pipe = pipe.to("cuda")
+        t2 = time.time()
+        print("Setup took: ", t2 - t1)
 
-        self.controlnet = ControlNet(self)
+    def load_image(self, path):
+        shutil.copyfile(path, "/tmp/image.png")
+        return load_image("/tmp/image.png").convert("RGB")
 
-        print("Loading IP-Adapter...")
-        self.ip_adapter = IPAdapterPlusXL(self.txt2img_pipe, IP_ADAPTER_IMAGE_ENCODER_PATH, IP_ADAPTER_SDXL_PATH, device="cuda", num_tokens=16)
-
-
-
-        print("setup took: ", time.time() - start)
-
-    def run_safety_checker(self, image):
-        safety_checker_input = self.feature_extractor(image, return_tensors="pt").to(
-            "cuda"
+    def resize_to_allowed_dimensions(self, width, height):
+        # List of SDXL dimensions
+        allowed_dimensions = [
+            (512, 2048), (512, 1984), (512, 1920), (512, 1856),
+            (576, 1792), (576, 1728), (576, 1664), (640, 1600),
+            (640, 1536), (704, 1472), (704, 1408), (704, 1344),
+            (768, 1344), (768, 1280), (832, 1216), (832, 1152),
+            (896, 1152), (896, 1088), (960, 1088), (960, 1024),
+            (1024, 1024), (1024, 960), (1088, 960), (1088, 896),
+            (1152, 896), (1152, 832), (1216, 832), (1280, 768),
+            (1344, 768), (1408, 704), (1472, 704), (1536, 640),
+            (1600, 640), (1664, 576), (1728, 576), (1792, 576),
+            (1856, 512), (1920, 512), (1984, 512), (2048, 512)
+        ]
+        # Calculate the aspect ratio
+        aspect_ratio = width / height
+        print(f"Aspect Ratio: {aspect_ratio:.2f}")
+        # Find the closest allowed dimensions that maintain the aspect ratio
+        closest_dimensions = min(
+            allowed_dimensions,
+            key=lambda dim: abs(dim[0] / dim[1] - aspect_ratio)
         )
-        np_image = [np.array(val) for val in image]
-        image, has_nsfw_concept = self.safety_checker(
-            images=np_image,
-            clip_input=safety_checker_input.pixel_values.to(torch.float16),
-        )
-        return image, has_nsfw_concept
+        return closest_dimensions
 
     @torch.inference_mode()
     def predict(
         self,
-        prompt: str = Input(
-            description="Input prompt",
-            default="An astronaut riding a rainbow unicorn",
-        ),
-        negative_prompt: str = Input(
-            description="Negative Prompt",
-            default="",
-        ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
             default=None,
         ),
-        mask: Path = Input(
-            description="Input mask for inpaint mode. Black areas will be preserved, white areas will be inpainted.",
-            default=None,
+        prompt: str = Input(
+            description="Input prompt",
+            default="aerial view, a futuristic research complex in a bright foggy jungle, hard lighting",
         ),
-        width: int = Input(
-            description="Width of output image",
-            default=768,
-        ),
-        height: int = Input(
-            description="Height of output image",
-            default=768,
-        ),
-        sizing_strategy: str = Input(
-            description="Decide how to resize images – use width/height, resize based on input image or control image",
-            choices=[
-                "width_height",
-                "input_image",
-                "controlnet_1_image",
-                "controlnet_2_image",
-                "controlnet_3_image",
-                "mask_image",
-            ],
-            default="width_height",
-        ),
-        num_outputs: int = Input(
-            description="Number of images to output",
-            ge=1,
-            le=4,
-            default=1,
-        ),
-        scheduler: str = Input(
-            description="scheduler",
-            choices=SCHEDULERS.keys(),
-            default="K_EULER",
+        negative_prompt: str = Input(
+            description="Input Negative Prompt",
+            default="low quality, bad quality, sketches",
         ),
         num_inference_steps: int = Input(
-            description="Number of denoising steps", ge=1, le=500, default=30
+            description="Number of denoising steps", ge=1, le=500, default=50
         ),
-        guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=1, le=50, default=7.5
-        ),
-        prompt_strength: float = Input(
-            description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image",
+        condition_scale: float = Input(
+            description="controlnet conditioning scale for generalization",
+            default=0.5,
             ge=0.0,
             le=1.0,
-            default=0.8,
         ),
         seed: int = Input(
-            description="Random seed. Leave blank to randomize the seed", default=None
+            description="Random seed. Set to 0 to randomize the seed", default=0
         ),
-        refine: str = Input(
-            description="Which refine style to use",
-            choices=["no_refiner", "base_image_refiner"],
-            default="no_refiner",
-        ),
-        refine_steps: int = Input(
-            description="For base_image_refiner, the number of steps to refine, defaults to num_inference_steps",
-            default=None,
-        ),
-        apply_watermark: bool = Input(
-            description="Applies a watermark to enable determining if an image is generated in downstream applications. If you have other provisions for generating or deploying images safely, you can use this to disable watermarking.",
-            default=False,
-        ),
-        lora_scale: float = Input(
-            description="LoRA additive scale. Only applicable on trained models.",
-            ge=0.0,
-            le=1.0,
-            default=0.6,
-        ),
-        lora_weights: str = Input(
-            description="Replicate LoRA weights to use. Leave blank to use the default weights.",
-            default=None,
-        ),
-        disable_safety_checker: bool = Input(
-            description="Disable safety checker for generated images. This feature is only available through the API.",
-            default=False,
-        ),
-        controlnet_1: str = Input(
-            description="Controlnet",
-            choices=ControlNet.CONTROLNET_MODELS,
-            default="none",
-        ),
-        controlnet_1_image: Path = Input(
-            description="Input image for first controlnet",
-            default=None,
-        ),
-        controlnet_1_conditioning_scale: float = Input(
-            description="How strong the controlnet conditioning is",
-            ge=0.0,
-            le=4.0,
-            default=0.75,
-        ),
-        controlnet_1_start: float = Input(
-            description="When controlnet conditioning starts",
-            ge=0.0,
-            le=1.0,
-            default=0.0,
-        ),
-        controlnet_1_end: float = Input(
-            description="When controlnet conditioning ends",
-            ge=0.0,
-            le=1.0,
-            default=1.0,
-        ),
-        controlnet_2: str = Input(
-            description="Controlnet",
-            choices=ControlNet.CONTROLNET_MODELS,
-            default="none",
-        ),
-        controlnet_2_image: Path = Input(
-            description="Input image for second controlnet",
-            default=None,
-        ),
-        controlnet_2_conditioning_scale: float = Input(
-            description="How strong the controlnet conditioning is",
-            ge=0.0,
-            le=4.0,
-            default=0.75,
-        ),
-        controlnet_2_start: float = Input(
-            description="When controlnet conditioning starts",
-            ge=0.0,
-            le=1.0,
-            default=0.0,
-        ),
-        controlnet_2_end: float = Input(
-            description="When controlnet conditioning ends",
-            ge=0.0,
-            le=1.0,
-            default=1.0,
-        ),
-        controlnet_3: str = Input(
-            description="Controlnet",
-            choices=ControlNet.CONTROLNET_MODELS,
-            default="none",
-        ),
-        controlnet_3_image: Path = Input(
-            description="Input image for third controlnet",
-            default=None,
-        ),
-        controlnet_3_conditioning_scale: float = Input(
-            description="How strong the controlnet conditioning is",
-            ge=0.0,
-            le=4.0,
-            default=0.75,
-        ),
-        controlnet_3_start: float = Input(
-            description="When controlnet conditioning starts",
-            ge=0.0,
-            le=1.0,
-            default=0.0,
-        ),
-        controlnet_3_end: float = Input(
-            description="When controlnet conditioning ends",
-            ge=0.0,
-            le=1.0,
-            default=1.0,
-        ),
-        ip_adapter_image: Path = Input(
-            description="Input image for IP-Adapter",
-            default=None,
-        ),
-        ip_adapter_scale: float = Input(
-            description="Scale for IP-Adapter conditioning",
-            ge=0.0,
-            le=1.0,
-            default=0.7,
-        ),
-    ) -> List[Path]:
-        """Run a single prediction on the model."""
-        predict_start = time.time()
-
-        if seed is None:
+    ) -> Path:
+        """Run a single prediction on the model"""
+        if (seed is None) or (seed <= 0):
             seed = int.from_bytes(os.urandom(2), "big")
+        generator = torch.Generator("cuda").manual_seed(seed)
         print(f"Using seed: {seed}")
 
-        resize_start = time.time()
-        (
-            width,
-            height,
-            resized_images,
-        ) = self.sizing_strategy.apply(
-            sizing_strategy,
-            width,
-            height,
-            image,
-            mask,
-            controlnet_1_image,
-            controlnet_2_image,
-            controlnet_3_image,
-        )
-        print(f"resize took: {time.time() - resize_start:.2f}s")
 
-        [
-            image,
-            mask,
-            controlnet_1_image,
-            controlnet_2_image,
-            controlnet_3_image,
-        ] = resized_images
+        image = self.load_image(image)
+        image_width, image_height = image.size
+        print("Original width:"+str(image_width)+", height:"+str(image_height))
+        new_width, new_height = self.resize_to_allowed_dimensions(image_width, image_height)
+        print("new_width:"+str(new_width)+", new_height:"+str(new_height))
+        image = image.resize((new_width, new_height))
 
-        if lora_weights:
-            lora_load_start = time.time()
-            self.load_trained_weights(lora_weights, self.txt2img_pipe)
-            print(f"lora load took: {time.time() - lora_load_start:.2f}s")
+        image = np.array(image)
+        image = cv2.Canny(image, 100, 200)
+        image = image[:, :, None]
+        image = np.concatenate([image, image, image], axis=2)
+        image = Image.fromarray(image)
 
-        # OOMs can leave vae in bad state
-        if self.txt2img_pipe.vae.dtype == torch.float32:
-            self.txt2img_pipe.vae.to(dtype=torch.float16)
+        images = self.pipe(
+            prompt, 
+            negative_prompt=negative_prompt, 
+            image=image, 
+            controlnet_conditioning_scale=condition_scale,
+            num_inference_steps=num_inference_steps,
+            generator=generator
+        ).images
 
-        sdxl_kwargs = {}
-        if self.tuned_model:
-            # consistency with fine-tuning API
-            for k, v in self.token_map.items():
-                prompt = prompt.replace(k, v)
-        print(f"Prompt: {prompt}")
+        output_path = f"/tmp/output.png"
+        images[0].save(output_path)
 
-        inpainting = image and mask
-        img2img = image and not mask
-        controlnet = (
-            controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
-        )
-
-        # Initialize pipe with a default value
-        pipe = self.txt2img_pipe
-
-        controlnet_args = {}
-        control_images = []
-        if controlnet:
-            controlnet_conditioning_scales = []
-            control_guidance_start = []
-            control_guidance_end = []
-
-            controlnets = [
-                (
-                    controlnet_1,
-                    controlnet_1_conditioning_scale,
-                    controlnet_1_start,
-                    controlnet_1_end,
-                    controlnet_1_image,
-                ),
-                (
-                    controlnet_2,
-                    controlnet_2_conditioning_scale,
-                    controlnet_2_start,
-                    controlnet_2_end,
-                    controlnet_2_image,
-                ),
-                (
-                    controlnet_3,
-                    controlnet_3_conditioning_scale,
-                    controlnet_3_start,
-                    controlnet_3_end,
-                    controlnet_3_image,
-                ),
-            ]
-
-            controlnet_preprocess_start = time.time()
-            for controlnet in controlnets:
-                if controlnet[0] != "none":
-                    controlnet_conditioning_scales.append(controlnet[1])
-                    control_guidance_start.append(controlnet[2])
-                    control_guidance_end.append(controlnet[3])
-                    annotated_image = self.controlnet.preprocess(
-                        controlnet[4], controlnet[0]
-                    )
-                    control_images.append(annotated_image)
-            print(
-                f"controlnet preprocess took: {time.time() - controlnet_preprocess_start:.2f}s"
-            )
-
-            controlnet_args = {
-                "controlnet_conditioning_scale": controlnet_conditioning_scales,
-                "control_guidance_start": control_guidance_start,
-                "control_guidance_end": control_guidance_end,
-            }
-
-            if inpainting:
-                print("Using inpaint + controlnet pipeline")
-                controlnet_args["control_image"] = control_images
-                pipe = self.build_controlnet_pipeline(
-                    StableDiffusionXLControlNetInpaintPipeline,
-                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
-                )
-            elif img2img:
-                print("Using img2img + controlnet pipeline")
-                controlnet_args["control_image"] = control_images
-                pipe = self.build_controlnet_pipeline(
-                    StableDiffusionXLControlNetImg2ImgPipeline,
-                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
-                )
-            else:
-                print("Using txt2img + controlnet pipeline")
-                controlnet_args["image"] = control_images
-                pipe = self.build_controlnet_pipeline(
-                    StableDiffusionXLControlNetPipeline,
-                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
-                )
-        elif inpainting:
-            print("Using inpaint pipeline")
-            pipe = self.inpaint_pipe
-        elif img2img:
-            print("Using img2img pipeline")
-            pipe = self.img2img_pipe
-        # No need for an else case as pipe is already initialized to txt2img_pipe
-
-        if inpainting:
-            sdxl_kwargs["image"] = image
-            sdxl_kwargs["mask_image"] = mask
-            sdxl_kwargs["strength"] = prompt_strength
-        elif img2img:
-            sdxl_kwargs["image"] = image
-            sdxl_kwargs["strength"] = prompt_strength
-
-        if refine == "base_image_refiner":
-            sdxl_kwargs["output_type"] = "latent"
-
-        if not apply_watermark:
-            # toggles watermark for this prediction
-            watermark_cache = pipe.watermark
-            pipe.watermark = None
-            self.refiner.watermark = None
-
-        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-        generator = torch.Generator("cuda").manual_seed(seed)
-
-        common_args = {
-            "prompt": [prompt] * num_outputs,
-            "negative_prompt": [negative_prompt] * num_outputs,
-            "guidance_scale": guidance_scale,
-            "generator": generator,
-            "num_inference_steps": num_inference_steps,
-        }
-
-        # img2img pipeline doesn't accept width/height
-        # (img2img with controlnet does)
-        if controlnet or not img2img:
-            common_args["width"] = width
-            common_args["height"] = height
-
-        if self.is_lora:
-            sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
-
-        inference_start = time.time()
-
-        if ip_adapter_image:
-            ip_image = Image.open(ip_adapter_image).convert("RGB")
-            ip_image = ip_image.resize((224, 224))
-            images = self.ip_adapter.generate(
-                pil_image=ip_image,
-                num_samples=num_outputs,
-                num_inference_steps=num_inference_steps,
-                seed=seed,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                guidance_scale=guidance_scale,
-                scale=ip_adapter_scale,
-            )
-            output = type('obj', (object,), {'images': images})
-        else:
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-        
-        print(f"inference took: {time.time() - inference_start:.2f}s")
-
-        if refine == "base_image_refiner":
-            refiner_kwargs = {
-                "image": output.images,
-            }
-
-            common_args_without_dimensions = {
-                k: v for k, v in common_args.items() if k not in ["width", "height"]
-            }
-
-            if refine == "base_image_refiner" and refine_steps:
-                common_args_without_dimensions["num_inference_steps"] = refine_steps
-
-            output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
-
-        if not apply_watermark:
-            pipe.watermark = watermark_cache
-            self.refiner.watermark = watermark_cache
-
-        if not disable_safety_checker:
-            _, has_nsfw_content = self.run_safety_checker(output.images)
-
-        output_paths = []
-
-        if controlnet:
-            for i, image in enumerate(control_images):
-                output_path = f"/tmp/control-{i}.png"
-                image.save(output_path)
-                output_paths.append(Path(output_path))
-
-        for i, image in enumerate(output.images):
-            if not disable_safety_checker:
-                if has_nsfw_content[i]:
-                    print(f"NSFW content detected in image {i}")
-                    continue
-            output_path = f"/tmp/out-{i}.png"
-            image.save(output_path)
-            output_paths.append(Path(output_path))
-
-        if len(output_paths) == 0:
-            raise Exception(
-                "NSFW content detected. Try running it again, or try a different prompt."
-            )
-
-        print(f"prediction took: {time.time() - predict_start:.2f}s")
-        return output_paths
+        return Path(output_path)

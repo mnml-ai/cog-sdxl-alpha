@@ -1,35 +1,16 @@
 # Configuration for Cog ⚙️
-# Reference: https://github.com/replicate/cog/blob/main/docs/yaml.md
-
 build:
   gpu: true
   cuda: "11.8"
-  python_version: "3.9"
+  python_version: "3.11"
   system_packages:
     - "libgl1-mesa-glx"
-    - "libsm6"
-    - "libxext6"
   python_packages:
-    - "diffusers==0.22.1"
     - "torch==2.0.1"
-    - "transformers==4.35.0"
-    - "invisible-watermark==0.2.0"
-    - "accelerate==0.24.1"
-    - "torchvision==0.15.2"
-    - "numpy==1.25.1"
-    - "fire==0.5.0"
-    - "opencv-python-headless>=4.1.0.25"
-    - "controlnet-aux==0.0.7"
-    - "mediapipe==0.10.8"
-    - "einops==0.7.0"
-    - "git+https://github.com/tencent-ailab/IP-Adapter.git"
-
-  run:
-    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.5.6/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
-    - git clone https://github.com/tencent-ailab/IP-Adapter.git /IP-Adapter
-    - cd /IP-Adapter && mkdir sdxl_models && cd sdxl_models && wget https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin
-    - cd /IP-Adapter && mkdir models && cd models && mkdir image_encoder && cd image_encoder && wget https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/config.json
-    - cd /IP-Adapter/models/image_encoder && wget https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors
-    - cd /IP-Adapter/models/image_encoder && wget https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/pytorch_model.bin
+    - "transformers==4.31.0"
+    - "diffusers==0.19.3"
+    - "accelerate==0.21.0"
+    - "safetensors"
+    - "opencv-python"
 
 predict: "predict.py:Predictor"

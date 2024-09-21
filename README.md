@@ -1,28 +1,23 @@
-# RealVisXL V3.0 with multi ControlNet and custom Loras
+# diffusers/controlnet-canny-sdxl-1.0 Cog model
 
-https://replicate.com/fofr/realvisxl-v3-multi-controlnet-lora
+This is an implementation of the [diffusers/controlnet-canny-sdxl-1.0](https://huggingface.co/diffusers/controlnet-canny-sdxl-1.0) as a Cog model. [Cog packages machine learning models as standard containers.](https://github.com/replicate/cog)
 
-[![Replicate demo and cloud API](https://replicate.com/fofr/realvisxl-v3-multi-controlnet-lora/badge)](https://replicate.com/fofr/realvisxl-v3-multi-controlnet-lora)
+First, download the pre-trained weights:
 
-RealVis XL V3.0 with:
+    cog run script/download-weights
 
-- img2img
-- inpainting
-- custom Replicate lora loading
-- up to 3 simultaneous controlnets with different images
-  - canny
-  - midas depth
-  - leres depth
-  - soft edge hed
-  - soft edge pidi
-  - openpose
-  - QR Monster (illusions)
-  - lineart
-  - lineart anime
-- img2img plus controlnet
-- inpainting plus controlnet
-- controlnet conditioning strengths
-- controlnet start and end controls
-- SDXL refiner
-- Image resizing based on width/height, input image or a control image
-- Disable safety checker via API
+Then, you can run predictions:
+
+    cog predict -i image=@demo.png -i prompt="aerial view, a futuristic research complex in a bright foggy jungle, hard lighting" -i negative_prompt="low quality, bad quality, sketches"
+
+## Example:
+
+Input:
+
+"aerial view, a futuristic research complex in a bright foggy jungle, hard lighting"
+
+![alt text](demo.png)
+
+Output:
+
+![alt text](output.png)
