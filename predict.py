@@ -546,9 +546,10 @@ class Predictor(BasePredictor):
         inference_start = time.time()
 
         if ip_adapter_image:
+            # Process IP-Adapter image first
             ip_image = Image.open(ip_adapter_image).convert("RGB")
             ip_image = ip_image.resize((224, 224))
-            images = self.ip_adapter.generate(
+            ip_adapter_images = self.ip_adapter.generate(
                 pil_image=ip_image,
                 num_samples=num_outputs,
                 num_inference_steps=num_inference_steps,
@@ -558,9 +559,10 @@ class Predictor(BasePredictor):
                 guidance_scale=guidance_scale,
                 scale=ip_adapter_scale,
             )
-            output = type('obj', (object,), {'images': images})
-        else:
-            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+            # Feed IP-Adapter output into ControlNet if img2img or inpainting
+            common_args["image"] = ip_adapter_images
+
+
         
         print(f"inference took: {time.time() - inference_start:.2f}s")
 
@@ -585,27 +587,67 @@ class Predictor(BasePredictor):
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
+        if not controlnet and not ip_adapter_image:
+            print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
+            output = pipe(**common_args, **sdxl_kwargs)
+        else:
+            if controlnet:
+                # Use ControlNet pipeline
+                output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+
+            if ip_adapter_image:
+                # Process IP-Adapter image first
+                ip_image = Image.open(ip_adapter_image).convert("RGB").resize((224, 224))
+                ip_adapter_images = self.ip_adapter.generate(
+                    pil_image=ip_image,
+                    num_samples=num_outputs,
+                    num_inference_steps=num_inference_steps,
+                    seed=seed,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    guidance_scale=guidance_scale,
+                    scale=ip_adapter_scale,
+                )
+
+                # Combine outputs from both IP-Adapter and ControlNet into the final image
+                if controlnet:
+                    combined_output = [
+                        Image.blend(ip_img, cn_img, alpha=0.5)
+                        for ip_img, cn_img in zip(ip_adapter_images, output.images)
+                    ]
+                    output.images = combined_output
+                else:
+                    # If only IP-Adapter is used, set its images as the output
+                    output.images = ip_adapter_images
+
+        # Continue with safety checking and saving the output
+        if not apply_watermark:
+            pipe.watermark = watermark_cache
+            self.refiner.watermark = watermark_cache
+
+        if not disable_safety_checker:
+            _, has_nsfw_content = self.run_safety_checker(output.images)
+
         output_paths = []
 
+        # Save controlnet images (if any)
         if controlnet:
             for i, image in enumerate(control_images):
                 output_path = f"/tmp/control-{i}.png"
                 image.save(output_path)
                 output_paths.append(Path(output_path))
 
+        # Save the output images
         for i, image in enumerate(output.images):
-            if not disable_safety_checker:
-                if has_nsfw_content[i]:
-                    print(f"NSFW content detected in image {i}")
-                    continue
+            if not disable_safety_checker and has_nsfw_content[i]:
+                print(f"NSFW content detected in image {i}")
+                continue
             output_path = f"/tmp/out-{i}.png"
             image.save(output_path)
             output_paths.append(Path(output_path))
 
         if len(output_paths) == 0:
-            raise Exception(
-                "NSFW content detected. Try running it again, or try a different prompt."
-            )
+            raise Exception("NSFW content detected. Try running it again, or try a different prompt.")
 
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
