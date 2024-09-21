@@ -587,9 +587,12 @@ class Predictor(BasePredictor):
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
+        # Initialize output to None at the beginning
+        output = None
+
         if not controlnet and not ip_adapter_image:
             print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
-            output = pipe(**common_args, **sdxl_kwargs)
+            output = pipe(**common_args, **sdxl_kwargs)  # Ensure the pipeline runs here
         else:
             if controlnet:
                 # Use ControlNet pipeline
@@ -618,7 +621,7 @@ class Predictor(BasePredictor):
                     output.images = combined_output
                 else:
                     # If only IP-Adapter is used, set its images as the output
-                    output.images = ip_adapter_images
+                    output = SimpleNamespace(images=ip_adapter_images)  # Assign a placeholder object
 
         # Continue with safety checking and saving the output
         if not apply_watermark:
