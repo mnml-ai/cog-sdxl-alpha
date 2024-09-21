@@ -504,7 +504,8 @@ class Predictor(BasePredictor):
             print("Using txt2img pipeline")
             pipe = self.txt2img_pipe
 
-         # New code for IP Adapter
+
+        # New Code: Add the IP Adapter conditioning before running the pipeline
         if ip_adapter_image:
             print("Using IP Adapter")
             if self.ip_adapter is None:
@@ -513,29 +514,25 @@ class Predictor(BasePredictor):
                 try:
                     # Preprocess the image
                     ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
-                    
                     if ip_adapter_image is not None:
                         # Apply IP Adapter to the pipeline
                         if self.ip_adapter.apply_to_pipeline(pipe):
                             # Encode the image
                             image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
-                            
                             if image_embeds is not None:
                                 # Add the encoded image and scale to the kwargs
                                 sdxl_kwargs["ip_adapter_image"] = image_embeds
                                 sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
                                 print(f"IP Adapter applied with scale {ip_adapter_scale}")
                             else:
-                                print("Failed to encode image for IP Adapter. Continuing without IP Adapter.")
+                                print("Failed to encode image for IP Adapter.")
                         else:
-                            print("Failed to apply IP Adapter to pipeline. Continuing without IP Adapter.")
+                            print("Failed to apply IP Adapter to pipeline.")
                     else:
-                        print("Failed to preprocess image for IP Adapter. Continuing without IP Adapter.")
+                        print("Failed to preprocess image for IP Adapter.")
                 except Exception as e:
                     print(f"Error applying IP Adapter: {str(e)}")
-                    print("Continuing without IP Adapter")
-                    if self.ip_adapter:
-                        self.ip_adapter.unapply_from_pipeline(pipe)
+
 
         if inpainting:
             sdxl_kwargs["image"] = image
@@ -603,11 +600,6 @@ class Predictor(BasePredictor):
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
-        # New code to unapply IP Adapter
-        if self.ip_adapter:
-            self.ip_adapter.unload()
-            self.ip_adapter = None
-
         output_paths = []
 
         if controlnet:
@@ -629,6 +621,11 @@ class Predictor(BasePredictor):
             raise Exception(
                 "NSFW content detected. Try running it again, or try a different prompt."
             )
+
+        # New code to unapply IP Adapter
+        if self.ip_adapter:
+            self.ip_adapter.unload()
+            self.ip_adapter = None
 
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
