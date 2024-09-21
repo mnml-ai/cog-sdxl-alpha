@@ -590,9 +590,10 @@ class Predictor(BasePredictor):
         # Initialize output to None at the beginning
         output = None
 
+        # Check if we are using ControlNet or IP-Adapter or just the default pipeline
         if not controlnet and not ip_adapter_image:
             print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
-            output = pipe(**common_args, **sdxl_kwargs)  # Ensure the pipeline runs here
+            output = pipe(**common_args, **sdxl_kwargs)  # Run the standard pipeline
         else:
             if controlnet:
                 # Use ControlNet pipeline
@@ -612,16 +613,20 @@ class Predictor(BasePredictor):
                     scale=ip_adapter_scale,
                 )
 
-                # Combine outputs from both IP-Adapter and ControlNet into the final image
                 if controlnet:
+                    # Combine outputs from both IP-Adapter and ControlNet into the final image
                     combined_output = [
                         Image.blend(ip_img, cn_img, alpha=0.5)
                         for ip_img, cn_img in zip(ip_adapter_images, output.images)
                     ]
                     output.images = combined_output
                 else:
-                    # If only IP-Adapter is used, set its images as the output
-                    output = SimpleNamespace(images=ip_adapter_images)  # Assign a placeholder object
+                    # If only IP-Adapter is used, assign its output
+                    output = SimpleNamespace(images=ip_adapter_images)
+
+        # Now make sure output is always initialized
+        if output is None:
+            raise ValueError("The output variable was not initialized correctly.")
 
         # Continue with safety checking and saving the output
         if not apply_watermark:
