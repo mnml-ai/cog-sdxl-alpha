@@ -29,8 +29,13 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
-# New import for IP Adapter
-from ip_adapter import IPAdapter  # New import
+from PIL import Image
+import sys
+sys.path.extend(['/IP-Adapter'])
+from ip_adapter import IPAdapterPlusXL
+
+IP_ADAPTER_IMAGE_ENCODER_PATH = "/IP-Adapter/models/image_encoder"
+IP_ADAPTER_SDXL_PATH = "/IP-Adapter/sdxl_models/ip-adapter-plus_sdxl_vit-h.bin"
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -42,9 +47,6 @@ REFINER_URL = (
 )
 SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
 
-# New constants for IP Adapter
-IP_ADAPTER_REPO = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors"
-IP_ADAPTER_CACHE = "./ip-adapter-cache"
 
 class KarrasDPM:
     def from_config(config):
@@ -165,10 +167,11 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
-        # Initialize IP Adapter here instead of setting it to None
-        self.ip_adapter = IPAdapter(self.txt2img_pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
-    
-        
+        print("Loading IP-Adapter...")
+        self.ip_adapter = IPAdapterPlusXL(self.txt2img_pipe, IP_ADAPTER_IMAGE_ENCODER_PATH, IP_ADAPTER_SDXL_PATH, device="cuda", num_tokens=16)
+
+
+
         print("setup took: ", time.time() - start)
 
     def run_safety_checker(self, image):
@@ -355,16 +358,15 @@ class Predictor(BasePredictor):
             le=1.0,
             default=1.0,
         ),
-        # New inputs for IP Adapter
         ip_adapter_image: Path = Input(
-            description="Input image for IP Adapter conditioning",
+            description="Input image for IP-Adapter",
             default=None,
         ),
         ip_adapter_scale: float = Input(
-            description="Scale for IP Adapter conditioning",
+            description="Scale for IP-Adapter conditioning",
             ge=0.0,
             le=1.0,
-            default=0.5,
+            default=0.7,
         ),
     ) -> List[Path]:
         """Run a single prediction on the model."""
@@ -420,6 +422,9 @@ class Predictor(BasePredictor):
         controlnet = (
             controlnet_1 != "none" or controlnet_2 != "none" or controlnet_3 != "none"
         )
+
+        # Initialize pipe with a default value
+        pipe = self.txt2img_pipe
 
         controlnet_args = {}
         control_images = []
@@ -477,62 +482,29 @@ class Predictor(BasePredictor):
                 controlnet_args["control_image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetInpaintPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
             elif img2img:
                 print("Using img2img + controlnet pipeline")
                 controlnet_args["control_image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetImg2ImgPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
             else:
                 print("Using txt2img + controlnet pipeline")
                 controlnet_args["image"] = control_images
                 pipe = self.build_controlnet_pipeline(
                     StableDiffusionXLControlNetPipeline,
-                    [controlnet[0] for controlnet in controlnets],
+                    [controlnet[0] for controlnet in controlnets if controlnet[0] != "none"],
                 )
-
         elif inpainting:
             print("Using inpaint pipeline")
             pipe = self.inpaint_pipe
         elif img2img:
             print("Using img2img pipeline")
             pipe = self.img2img_pipe
-        else:
-            print("Using txt2img pipeline")
-            pipe = self.txt2img_pipe
-
-
-        # New Code: Add the IP Adapter conditioning before running the pipeline
-        if ip_adapter_image is not None and ip_adapter_image.nelement() > 0:
-            print("Using IP Adapter")
-            if self.ip_adapter is None:
-                print("IP Adapter is not initialized. Skipping IP Adapter processing.")
-            else:
-                try:
-                    # Preprocess the image
-                    ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
-                    if ip_adapter_image is not None:
-                        # Apply IP Adapter to the pipeline
-                        if self.ip_adapter.apply_to_pipeline(pipe):
-                            # Encode the image
-                            image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
-                            if image_embeds is not None:
-                                # Add the encoded image and scale to the kwargs
-                                sdxl_kwargs["ip_adapter_image"] = image_embeds
-                                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
-                                print(f"IP Adapter applied with scale {ip_adapter_scale}")
-                            else:
-                                print("Failed to encode image for IP Adapter.")
-                        else:
-                            print("Failed to apply IP Adapter to pipeline.")
-                    else:
-                        print("Failed to preprocess image for IP Adapter.")
-                except Exception as e:
-                    print(f"Error applying IP Adapter: {str(e)}")
-
+        # No need for an else case as pipe is already initialized to txt2img_pipe
 
         if inpainting:
             sdxl_kwargs["image"] = image
@@ -562,7 +534,7 @@ class Predictor(BasePredictor):
             "num_inference_steps": num_inference_steps,
         }
 
-        # img2img pipeline doesn’t accept width/height
+        # img2img pipeline doesn't accept width/height
         # (img2img with controlnet does)
         if controlnet or not img2img:
             common_args["width"] = width
@@ -572,12 +544,25 @@ class Predictor(BasePredictor):
             sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
 
         inference_start = time.time()
-        output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
-        print(f"inference took: {time.time() - inference_start:.2f}s")
 
-        # Unapply IP Adapter after inference
         if ip_adapter_image:
-            self.ip_adapter.unapply_from_pipeline(pipe)
+            ip_image = Image.open(ip_adapter_image).convert("RGB")
+            ip_image = ip_image.resize((224, 224))
+            images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                scale=ip_adapter_scale,
+            )
+            output = type('obj', (object,), {'images': images})
+        else:
+            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+        
+        print(f"inference took: {time.time() - inference_start:.2f}s")
 
         if refine == "base_image_refiner":
             refiner_kwargs = {
@@ -621,11 +606,6 @@ class Predictor(BasePredictor):
             raise Exception(
                 "NSFW content detected. Try running it again, or try a different prompt."
             )
-
-        # New code to unapply IP Adapter
-        if self.ip_adapter:
-            self.ip_adapter.unload()
-            self.ip_adapter = None
 
         print(f"prediction took: {time.time() - predict_start:.2f}s")
         return output_paths
