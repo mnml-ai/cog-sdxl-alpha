@@ -165,8 +165,9 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
-        # New attribute for IP Adapter
-        self.ip_adapter = None  # Initialize IP-Adapter as None
+        # Initialize IP Adapter here instead of setting it to None
+        self.ip_adapter = IPAdapter(self.txt2img_pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
+    
         
         print("setup took: ", time.time() - start)
 
@@ -505,19 +506,26 @@ class Predictor(BasePredictor):
 
          # New code for IP Adapter
         if ip_adapter_image:
-            print("Loading and using IP Adapter")
+            print("Using IP Adapter")
             try:
-                if self.ip_adapter is None:
-                    self.ip_adapter = IPAdapter(pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
-                self.ip_adapter.apply_to_pipeline(pipe)
+                # Preprocess the image
                 ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
+                
+                # Apply IP Adapter to the pipeline
+                self.ip_adapter.apply_to_pipeline(pipe)
+                
+                # Encode the image
                 image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
-                sdxl_kwargs["image_embeds"] = image_embeds
+                
+                # Add the encoded image and scale to the kwargs
+                sdxl_kwargs["ip_adapter_image"] = image_embeds
                 sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
+                
+                print(f"IP Adapter applied with scale {ip_adapter_scale}")
             except Exception as e:
-                print(f"Error loading IP Adapter: {str(e)}")
+                print(f"Error applying IP Adapter: {str(e)}")
                 print("Continuing without IP Adapter")
-                self.ip_adapter = None
+                self.ip_adapter.unapply_from_pipeline(pipe)
 
         if inpainting:
             sdxl_kwargs["image"] = image
@@ -559,6 +567,10 @@ class Predictor(BasePredictor):
         inference_start = time.time()
         output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
         print(f"inference took: {time.time() - inference_start:.2f}s")
+
+        # Unapply IP Adapter after inference
+        if ip_adapter_image:
+            self.ip_adapter.unapply_from_pipeline(pipe)
 
         if refine == "base_image_refiner":
             refiner_kwargs = {
