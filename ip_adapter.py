@@ -1,107 +1,51 @@
 import os
 import torch
-from PIL import Image
-from diffusers import StableDiffusionXLPipeline
+from diffusers import AutoencoderKL, StableDiffusionXLPipeline
 from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
-from huggingface_hub import hf_hub_download
+from PIL import Image
+from weights_downloader import WeightsDownloader
 
 class IPAdapter:
-    def __init__(self, pipe: StableDiffusionXLPipeline, repo_id: str, cache_dir: str):
+    def __init__(self, pipe, repo, cache_dir):
         self.pipe = pipe
-        self.device = pipe.device
-        self.dtype = pipe.dtype
+        self.repo = repo
+        self.cache_dir = cache_dir
+        self.ip_adapter = None
+        self.image_encoder = None
+        self.image_processor = None
         
-        # Download and load the IP-Adapter image encoder
-        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-            "openai/clip-vit-large-patch14",
-            torch_dtype=self.dtype
-        ).to(self.device)
+    def download_weights(self):
+        WeightsDownloader.download_if_not_exists(self.repo, self.cache_dir)
         
-        self.feature_extractor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    def load(self):
+        if self.ip_adapter is None:
+            self.download_weights()
+            self.ip_adapter = torch.load(os.path.join(self.cache_dir, "ip_adapter_sdxl.bin"), map_location="cuda")
+            self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+                "openai/clip-vit-large-patch14",
+                torch_dtype=torch.float16
+            ).to("cuda")
+            self.image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
         
-        # Download IP-Adapter weights
-        ip_adapter_path = hf_hub_download(repo_id=repo_id, 
-                                          filename="sdxl_models/ip-adapter-plus_sdxl_vit-h.bin", 
-                                          cache_dir=cache_dir)
-        
-        self.ip_layers = torch.load(ip_adapter_path, map_location="cpu")
-        self.ip_layers = {k: v.to(self.device, dtype=self.dtype) for k, v in self.ip_layers.items()}
-
-    def preprocess_image(self, image):
-        if isinstance(image, str):
-            image = Image.open(image)
-        image = self.feature_extractor(images=image, return_tensors="pt").pixel_values
-        image = image.to(self.device, dtype=self.dtype)
-        return image
-
-    def apply_to_pipeline(self, pipe):
-        def attn_processor(attn, hidden_states, encoder_hidden_states, attention_mask=None):
-            batch_size, sequence_length, _ = hidden_states.shape
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-            query = attn.to_q(hidden_states)
-            
-            is_cross_attention = encoder_hidden_states is not None
-            if is_cross_attention:
-                key = attn.to_k(encoder_hidden_states)
-                value = attn.to_v(encoder_hidden_states)
-                
-                # IP-Adapter cross-attention forward
-                ip_key = self.ip_layers["key"]
-                ip_value = self.ip_layers["value"]
-                
-                key = torch.cat([key, ip_key], dim=1)
-                value = torch.cat([value, ip_value], dim=1)
-            else:
-                key = attn.to_k(hidden_states)
-                value = attn.to_v(hidden_states)
-            
-            attention_probs = attn.get_attention_scores(query, key, attention_mask)
-            hidden_states = torch.bmm(attention_probs, value)
-            hidden_states = attn.to_out[0](hidden_states)
-            hidden_states = attn.to_out[1](hidden_states)
-            
-            return hidden_states
-
-        # Apply the custom attention processor to all cross-attention layers
-        for module in pipe.unet.modules():
-            if module.__class__.__name__ == "Attention" and module.is_cross_attention:
-                module.processor = attn_processor
-
-    def unapply_from_pipeline(self, pipe):
-        # Restore the original attention processors
-        for module in pipe.unet.modules():
-            if module.__class__.__name__ == "Attention" and module.is_cross_attention:
-                module.processor = None
-
     def unload(self):
+        del self.ip_adapter
         del self.image_encoder
-        del self.ip_layers
+        del self.image_processor
         torch.cuda.empty_cache()
-
-    def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask=None):
-        batch_size, sequence_length, _ = hidden_states.shape
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-
-        query = attn.to_q(hidden_states)
-
-        is_cross_attention = encoder_hidden_states is not None
-        if is_cross_attention:
-            key = attn.to_k(encoder_hidden_states)
-            value = attn.to_v(encoder_hidden_states)
-            
-            # IP-Adapter cross-attention forward
-            ip_key = self.ip_layers["key"]
-            ip_value = self.ip_layers["value"]
-            
-            key = torch.cat([key, ip_key], dim=1)
-            value = torch.cat([value, ip_value], dim=1)
-        else:
-            key = attn.to_k(hidden_states)
-            value = attn.to_v(hidden_states)
-
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        hidden_states = torch.bmm(attention_probs, value)
-        hidden_states = attn.to_out[0](hidden_states)
-        hidden_states = attn.to_out[1](hidden_states)
-
-        return hidden_states
+        self.ip_adapter = None
+        self.image_encoder = None
+        self.image_processor = None
+        
+    def preprocess_image(self, image_path):
+        image = Image.open(image_path).convert("RGB")
+        image = self.image_processor(image, return_tensors="pt").pixel_values
+        return image.to("cuda", dtype=torch.float16)
+        
+    def apply_to_pipeline(self, pipe):
+        self.load()
+        pipe.unet = self.ip_adapter.adapt_unet(pipe.unet)
+        pipe.image_encoder = self.image_encoder
+        
+    def unapply_from_pipeline(self, pipe):
+        pipe.unet = self.ip_adapter.unadapt_unet(pipe.unet)
+        pipe.image_encoder = None

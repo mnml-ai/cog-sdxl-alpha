@@ -29,6 +29,8 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
+# New import for IP Adapter
+from ip_adapter import IPAdapter  # New import
 
 SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
@@ -40,6 +42,9 @@ REFINER_URL = (
 )
 SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
 
+# New constants for IP Adapter
+IP_ADAPTER_REPO = "h94/IP-Adapter"
+IP_ADAPTER_CACHE = "./ip-adapter-cache"
 
 class KarrasDPM:
     def from_config(config):
@@ -160,6 +165,9 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
+        # New attribute for IP Adapter
+        self.ip_adapter = None  # Initialize IP-Adapter as None
+        
         print("setup took: ", time.time() - start)
 
     def run_safety_checker(self, image):
@@ -346,6 +354,17 @@ class Predictor(BasePredictor):
             le=1.0,
             default=1.0,
         ),
+        # New inputs for IP Adapter
+        ip_adapter_image: Path = Input(
+            description="Input image for IP Adapter conditioning",
+            default=None,
+        ),
+        ip_adapter_scale: float = Input(
+            description="Scale for IP Adapter conditioning",
+            ge=0.0,
+            le=1.0,
+            default=0.5,
+        ),
     ) -> List[Path]:
         """Run a single prediction on the model."""
         predict_start = time.time()
@@ -484,6 +503,16 @@ class Predictor(BasePredictor):
             print("Using txt2img pipeline")
             pipe = self.txt2img_pipe
 
+         # New code for IP Adapter
+        if ip_adapter_image:
+            print("Loading and using IP Adapter")
+            if self.ip_adapter is None:
+                self.ip_adapter = IPAdapter(pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
+            ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
+            sdxl_kwargs["ip_adapter_image"] = ip_adapter_image
+            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
+            self.ip_adapter.apply_to_pipeline(pipe)
+
         if inpainting:
             sdxl_kwargs["image"] = image
             sdxl_kwargs["mask_image"] = mask
@@ -545,6 +574,12 @@ class Predictor(BasePredictor):
 
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
+
+        # New code to unapply IP Adapter
+        if self.ip_adapter:
+            self.ip_adapter.unapply_from_pipeline(pipe)
+            self.ip_adapter.unload()
+            self.ip_adapter = None
 
         output_paths = []
 
