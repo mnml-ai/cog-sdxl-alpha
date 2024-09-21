@@ -590,58 +590,56 @@ class Predictor(BasePredictor):
         # Initialize output to None at the beginning
         output = None
 
-        # Handle the case when neither ControlNet nor IP-Adapter is used
+        # Default to standard pipeline if neither ControlNet nor IP-Adapter is used
         if not controlnet and not ip_adapter_image:
             print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
-            output = pipe(**common_args, **sdxl_kwargs)  # Run the standard pipeline
-        else:
-            # Process ControlNet pipeline if provided
+            output = pipe(**common_args, **sdxl_kwargs)
+
+        # Check if ControlNet is used
+        if controlnet:
+            controlnet_args["control_image"] = control_images
+            output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+
+        # Check if IP-Adapter image is provided
+        if ip_adapter_image:
+            # Load and process the IP-Adapter image
+            ip_image = Image.open(ip_adapter_image).convert("RGB").resize((224, 224))
+            ip_adapter_images = self.ip_adapter.generate(
+                pil_image=ip_image,
+                num_samples=num_outputs,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_scale=guidance_scale,
+                scale=ip_adapter_scale,
+            )
+
+            # If ControlNet was used, combine the outputs, otherwise use IP-Adapter directly
             if controlnet:
-                output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+                combined_output = [
+                    Image.blend(ip_img, cn_img, alpha=0.5)
+                    for ip_img, cn_img in zip(ip_adapter_images, output.images)
+                ]
+                output.images = combined_output
+            else:
+                output = SimpleNamespace(images=ip_adapter_images)
 
-            # Process IP-Adapter image input if provided
-            if ip_adapter_image:
-                ip_image = Image.open(ip_adapter_image).convert("RGB").resize((224, 224))
-                ip_adapter_images = self.ip_adapter.generate(
-                    pil_image=ip_image,
-                    num_samples=num_outputs,
-                    num_inference_steps=num_inference_steps,
-                    seed=seed,
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    guidance_scale=guidance_scale,
-                    scale=ip_adapter_scale,
-                )
-
-                # If both ControlNet and IP-Adapter are used, blend the results
-                if controlnet:
-                    combined_output = [
-                        Image.blend(ip_img, cn_img, alpha=0.5)
-                        for ip_img, cn_img in zip(ip_adapter_images, output.images)
-                    ]
-                    output.images = combined_output
-                else:
-                    # If only IP-Adapter is used, assign its output directly
-                    output = SimpleNamespace(images=ip_adapter_images)
-
-        # Ensure `output` has been assigned, otherwise raise an error
+        # Ensure `output` has been assigned
         if output is None:
             raise ValueError("The output variable was not initialized correctly.")
 
-        # Optionally refine the generated images if requested
-        if refine == "base_image_refiner":
-            refiner_kwargs = {
-                "image": output.images,
-            }
-            output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
+        # Proceed to the safety checker and refinement process
+        if not apply_watermark:
+            pipe.watermark = watermark_cache
+            self.refiner.watermark = watermark_cache
 
-        # Continue with safety checking and saving the output
         if not disable_safety_checker:
             _, has_nsfw_content = self.run_safety_checker(output.images)
 
         output_paths = []
 
-        # Save the generated output images
+        # Save the images generated
         for i, image in enumerate(output.images):
             if not disable_safety_checker and has_nsfw_content[i]:
                 print(f"NSFW content detected in image {i}")
@@ -650,7 +648,6 @@ class Predictor(BasePredictor):
             image.save(output_path)
             output_paths.append(Path(output_path))
 
-        # Return the saved image paths
         if len(output_paths) == 0:
             raise Exception("NSFW content detected. Try running it again, or try a different prompt.")
 
