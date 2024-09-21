@@ -590,7 +590,6 @@ class Predictor(BasePredictor):
         # Initialize output to None at the beginning
         output = None
 
-        # Check if we are using ControlNet or IP-Adapter or just the default pipeline
         if not controlnet and not ip_adapter_image:
             print("Neither ControlNet nor IP-Adapter provided, using standard pipeline.")
             output = pipe(**common_args, **sdxl_kwargs)  # Run the standard pipeline
@@ -624,7 +623,7 @@ class Predictor(BasePredictor):
                     # If only IP-Adapter is used, assign its output
                     output = SimpleNamespace(images=ip_adapter_images)
 
-        # Now make sure output is always initialized
+        # Ensure `output` has been assigned, otherwise raise an error
         if output is None:
             raise ValueError("The output variable was not initialized correctly.")
 
