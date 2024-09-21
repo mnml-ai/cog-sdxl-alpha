@@ -29,12 +29,11 @@ from weights_manager import WeightsManager
 from controlnet import ControlNet
 from sizing_strategy import SizingStrategy
 
-
-SDXL_MODEL_CACHE = "./sdxl-cache"
+REALVISXL_MODEL_CACHE = "./realvisxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
 SAFETY_CACHE = "./safety-cache"
 FEATURE_EXTRACTOR = "./feature-extractor"
-SDXL_URL = "https://weights.replicate.delivery/default/RealVisXL/RealVisXL_V3.0.tar"
+REALVISXL_URL = "https://github.com/your-repo/RealVisXL/raw/main/"  # Update this URL
 REFINER_URL = (
     "https://weights.replicate.delivery/default/sdxl/refiner-no-vae-no-encoder-1.0.tar"
 )
@@ -58,28 +57,15 @@ SCHEDULERS = {
 
 
 class Predictor(BasePredictor):
-    def load_trained_weights(self, weights, pipe):
-        self.weights_manager.load_trained_weights(weights, pipe)
-
-    def build_controlnet_pipeline(self, pipeline_class, controlnet_models):
-        pipe = pipeline_class.from_pretrained(
-            SDXL_MODEL_CACHE,
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-            variant="fp16",
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            text_encoder_2=self.txt2img_pipe.text_encoder_2,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            tokenizer_2=self.txt2img_pipe.tokenizer_2,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-            controlnet=self.controlnet.get_models(controlnet_models),
-        )
-
-        pipe.to("cuda")
-
-        return pipe
+    def load_realvisxl_component(self, component_name):
+        component_path = os.path.join(REALVISXL_MODEL_CACHE, component_name)
+        if not os.path.exists(component_path):
+            print(f"Downloading {component_name}...")
+            WeightsDownloader.download_if_not_exists(
+                f"{REALVISXL_URL}{component_name}",
+                component_path
+            )
+        return component_path
 
     def setup(self, weights: Optional[Path] = None):
         """Load the model into memory to make running multiple predictions efficient"""
@@ -100,11 +86,25 @@ class Predictor(BasePredictor):
         ).to("cuda")
         self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
 
-        WeightsDownloader.download_if_not_exists(SDXL_URL, SDXL_MODEL_CACHE)
+        print("Loading RealVisXL components...")
+        scheduler = self.load_realvisxl_component("scheduler")
+        text_encoder = self.load_realvisxl_component("text_encoder")
+        text_encoder_2 = self.load_realvisxl_component("text_encoder_2")
+        tokenizer = self.load_realvisxl_component("tokenizer")
+        tokenizer_2 = self.load_realvisxl_component("tokenizer_2")
+        unet = self.load_realvisxl_component("unet")
+        vae = self.load_realvisxl_component("vae")
 
-        print("Loading sdxl txt2img pipeline...")
+        print("Loading RealVisXL txt2img pipeline...")
         self.txt2img_pipe = DiffusionPipeline.from_pretrained(
-            SDXL_MODEL_CACHE,
+            REALVISXL_MODEL_CACHE,
+            scheduler=scheduler,
+            text_encoder=text_encoder,
+            text_encoder_2=text_encoder_2,
+            tokenizer=tokenizer,
+            tokenizer_2=tokenizer_2,
+            unet=unet,
+            vae=vae,
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16",
@@ -115,7 +115,7 @@ class Predictor(BasePredictor):
 
         self.txt2img_pipe.to("cuda")
 
-        print("Loading SDXL img2img pipeline...")
+        print("Loading RealVisXL img2img pipeline...")
         self.img2img_pipe = StableDiffusionXLImg2ImgPipeline(
             vae=self.txt2img_pipe.vae,
             text_encoder=self.txt2img_pipe.text_encoder,
@@ -127,7 +127,7 @@ class Predictor(BasePredictor):
         )
         self.img2img_pipe.to("cuda")
 
-        print("Loading SDXL inpaint pipeline...")
+        print("Loading RealVisXL inpaint pipeline...")
         self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
             vae=self.txt2img_pipe.vae,
             text_encoder=self.txt2img_pipe.text_encoder,
