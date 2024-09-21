@@ -506,7 +506,7 @@ class Predictor(BasePredictor):
 
 
         # New Code: Add the IP Adapter conditioning before running the pipeline
-        if ip_adapter_image:
+        if ip_adapter_image is not None and ip_adapter_image.nelement() > 0:
             print("Using IP Adapter")
             if self.ip_adapter is None:
                 print("IP Adapter is not initialized. Skipping IP Adapter processing.")
