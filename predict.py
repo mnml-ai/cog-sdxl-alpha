@@ -506,12 +506,17 @@ class Predictor(BasePredictor):
          # New code for IP Adapter
         if ip_adapter_image:
             print("Loading and using IP Adapter")
-            if self.ip_adapter is None:
-                self.ip_adapter = IPAdapter(pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
-            ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
-            sdxl_kwargs["ip_adapter_image"] = ip_adapter_image
-            sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
-            self.ip_adapter.apply_to_pipeline(pipe)
+            try:
+                if self.ip_adapter is None:
+                    self.ip_adapter = IPAdapter(pipe, IP_ADAPTER_REPO, IP_ADAPTER_CACHE)
+                ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
+                sdxl_kwargs["ip_adapter_image"] = ip_adapter_image
+                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
+                self.ip_adapter.apply_to_pipeline(pipe)
+            except Exception as e:
+                print(f"Error loading IP Adapter: {str(e)}")
+                print("Continuing without IP Adapter")
+                self.ip_adapter = None
 
         if inpainting:
             sdxl_kwargs["image"] = image

@@ -37,6 +37,8 @@ class IPAdapter:
         self.image_processor = None
         
     def preprocess_image(self, image_path):
+        if self.image_processor is None:
+            self.load()
         image = Image.open(image_path).convert("RGB")
         image = self.image_processor(image, return_tensors="pt").pixel_values
         return image.to("cuda", dtype=torch.float16)
