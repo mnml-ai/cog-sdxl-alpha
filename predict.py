@@ -43,7 +43,7 @@ REFINER_URL = (
 SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
 
 # New constants for IP Adapter
-IP_ADAPTER_REPO = "h94/IP-Adapter"
+IP_ADAPTER_REPO = "https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors"
 IP_ADAPTER_CACHE = "./ip-adapter-cache"
 
 class KarrasDPM:
@@ -507,25 +507,35 @@ class Predictor(BasePredictor):
          # New code for IP Adapter
         if ip_adapter_image:
             print("Using IP Adapter")
-            try:
-                # Preprocess the image
-                ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
-                
-                # Apply IP Adapter to the pipeline
-                self.ip_adapter.apply_to_pipeline(pipe)
-                
-                # Encode the image
-                image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
-                
-                # Add the encoded image and scale to the kwargs
-                sdxl_kwargs["ip_adapter_image"] = image_embeds
-                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
-                
-                print(f"IP Adapter applied with scale {ip_adapter_scale}")
-            except Exception as e:
-                print(f"Error applying IP Adapter: {str(e)}")
-                print("Continuing without IP Adapter")
-                self.ip_adapter.unapply_from_pipeline(pipe)
+            if self.ip_adapter is None:
+                print("IP Adapter is not initialized. Skipping IP Adapter processing.")
+            else:
+                try:
+                    # Preprocess the image
+                    ip_adapter_image = self.ip_adapter.preprocess_image(ip_adapter_image)
+                    
+                    if ip_adapter_image is not None:
+                        # Apply IP Adapter to the pipeline
+                        if self.ip_adapter.apply_to_pipeline(pipe):
+                            # Encode the image
+                            image_embeds = self.ip_adapter.encode_image(ip_adapter_image)
+                            
+                            if image_embeds is not None:
+                                # Add the encoded image and scale to the kwargs
+                                sdxl_kwargs["ip_adapter_image"] = image_embeds
+                                sdxl_kwargs["ip_adapter_scale"] = ip_adapter_scale
+                                print(f"IP Adapter applied with scale {ip_adapter_scale}")
+                            else:
+                                print("Failed to encode image for IP Adapter. Continuing without IP Adapter.")
+                        else:
+                            print("Failed to apply IP Adapter to pipeline. Continuing without IP Adapter.")
+                    else:
+                        print("Failed to preprocess image for IP Adapter. Continuing without IP Adapter.")
+                except Exception as e:
+                    print(f"Error applying IP Adapter: {str(e)}")
+                    print("Continuing without IP Adapter")
+                    if self.ip_adapter:
+                        self.ip_adapter.unapply_from_pipeline(pipe)
 
         if inpainting:
             sdxl_kwargs["image"] = image
